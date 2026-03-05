@@ -65,11 +65,18 @@ export const AuthProvider = ({ children }) => {
       setUser(event.detail);
       setLoading(false);
     };
+
+    const handleCustomerUserLogin = (event) => {
+      setUser(event.detail);
+      setLoading(false);
+    };
     
     window.addEventListener('lineUserLogin', handleLineUserLogin);
+    window.addEventListener('customerUserLogin', handleCustomerUserLogin);
     
     return () => {
       window.removeEventListener('lineUserLogin', handleLineUserLogin);
+      window.removeEventListener('customerUserLogin', handleCustomerUserLogin);
     };
   }, [fetchUser]);
 
@@ -87,6 +94,7 @@ export const AuthProvider = ({ children }) => {
     } finally {
       // Always clear local state and storage regardless of API call success
       localStorage.removeItem('customerUser');
+      localStorage.removeItem('customerToken');
       setUser(null);
       // Redirect to home page after logout
       window.location.href = '/';
@@ -95,6 +103,10 @@ export const AuthProvider = ({ children }) => {
 
   // Get authentication token for API calls
   const getAuthToken = useCallback(() => {
+    const customerToken = localStorage.getItem('customerToken');
+    if (customerToken) {
+      return customerToken;
+    }
     if (user && user.lineUserId) {
       return `line.${user.lineUserId}`;
     }

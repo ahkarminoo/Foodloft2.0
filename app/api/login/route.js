@@ -1,37 +1,68 @@
 import { NextResponse } from "next/server";
 import dbConnect from "@/lib/mongodb";
 import User from "@/models/user";
+import bcrypt from "bcryptjs";
+import jwt from "jsonwebtoken";
 
 export async function POST(req) {
   try {
-    const { firebaseUid, email } = await req.json();
+    const { email, password } = await req.json();
+    const normalizedEmail = String(email || "").trim().toLowerCase();
 
-    console.log("🔐 Login API called with:", { firebaseUid, email });
-
-    if (!firebaseUid || !email) {
+    if (!normalizedEmail || !password) {
       return NextResponse.json(
-        { message: "firebaseUid and email are required" },
+        { message: "Email and password are required" },
         { status: 400 }
       );
     }
 
     await dbConnect();
 
-    // Find user by firebaseUid and email
-    const user = await User.findOne({ firebaseUid, email });
+    const user = await User.findOne({ email: normalizedEmail });
 
     if (!user) {
-      console.log("❌ No user found for UID:", firebaseUid);
       return NextResponse.json(
-        { message: "User not found" },
-        { status: 404 }
+        { message: "Invalid credentials" },
+        { status: 401 }
       );
     }
 
-    console.log("✅ User found:", user.email);
+    if (!user.password) {
+      return NextResponse.json(
+        { message: "This account does not have password login enabled" },
+        { status: 401 }
+      );
+    }
 
-    // Prepare response
+    const isPasswordMatch = await bcrypt.compare(password, user.password);
+    if (!isPasswordMatch) {
+      return NextResponse.json(
+        { message: "Invalid credentials" },
+        { status: 401 }
+      );
+    }
+
+    const jwtSecret = process.env.JWT_SECRET || process.env.NEXTAUTH_SECRET;
+    if (!jwtSecret) {
+      return NextResponse.json(
+        { message: "JWT secret is not configured" },
+        { status: 500 }
+      );
+    }
+
+    const token = jwt.sign(
+      {
+        userId: user._id,
+        email: user.email,
+        role: user.role,
+        isCustomer: true
+      },
+      jwtSecret,
+      { expiresIn: "7d" }
+    );
+
     const userData = {
+      _id: user._id,
       id: user._id,
       email: user.email,
       role: user.role,
@@ -41,11 +72,11 @@ export async function POST(req) {
     };
 
     return NextResponse.json(
-      { message: "Login successful", user: userData },
+      { message: "Login successful", user: userData, token },
       { status: 200 }
     );
   } catch (error) {
-    console.error("🔥 Error in login API:", error);
+    console.error("Login API error:", error);
     return NextResponse.json(
       { message: "Internal Server Error" },
       { status: 500 }

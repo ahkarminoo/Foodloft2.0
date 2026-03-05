@@ -6,6 +6,51 @@ import { verifyFirebaseAuth } from '@/lib/firebase-admin';
 import User from '@/models/user';
 import Restaurant from '@/models/Restaurants';
 
+function timeToMinutes(timeStr) {
+    if (!timeStr || typeof timeStr !== 'string') return NaN;
+
+    const trimmed = timeStr.trim();
+    const twelveHourMatch = trimmed.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
+    if (twelveHourMatch) {
+        let hours = Number(twelveHourMatch[1]);
+        const minutes = Number(twelveHourMatch[2]);
+        const period = twelveHourMatch[3].toUpperCase();
+
+        if (period === 'PM' && hours !== 12) hours += 12;
+        if (period === 'AM' && hours === 12) hours = 0;
+        return hours * 60 + minutes;
+    }
+
+    const twentyFourHourMatch = trimmed.match(/^(\d{1,2}):(\d{2})$/);
+    if (twentyFourHourMatch) {
+        const hours = Number(twentyFourHourMatch[1]);
+        const minutes = Number(twentyFourHourMatch[2]);
+        return hours * 60 + minutes;
+    }
+
+    return NaN;
+}
+
+function hasOverlap(startA, endA, startB, endB) {
+    const aStart = timeToMinutes(startA);
+    const aEnd = timeToMinutes(endA);
+    const bStart = timeToMinutes(startB);
+    const bEnd = timeToMinutes(endB);
+
+    if ([aStart, aEnd, bStart, bEnd].some(Number.isNaN)) return false;
+    return aStart < bEnd && aEnd > bStart;
+}
+
+function inferDurationMinutes(startTime, endTime) {
+    const start = timeToMinutes(startTime);
+    const end = timeToMinutes(endTime);
+
+    if (Number.isNaN(start) || Number.isNaN(end)) return 120;
+    let duration = end - start;
+    if (duration <= 0) duration += 24 * 60;
+    return duration;
+}
+
 export async function POST(request) {
     try {
         await dbConnect();
@@ -109,17 +154,42 @@ export async function POST(request) {
         
         try {
             await session.withTransaction(async () => {
-                // Double-check for conflicts (race condition protection)
-                const existingBooking = await Booking.findOne({
+                const lockDateStart = new Date(tableLock.date);
+                lockDateStart.setHours(0, 0, 0, 0);
+                const lockDateEnd = new Date(lockDateStart);
+                lockDateEnd.setDate(lockDateEnd.getDate() + 1);
+
+                // Double-check for booking overlaps (race condition protection)
+                const sameDayBookings = await Booking.find({
                     restaurantId: tableLock.restaurantId,
                     tableId: tableLock.tableId,
-                    date: tableLock.date,
-                    startTime: tableLock.startTime,
-                    endTime: tableLock.endTime,
+                    date: { $gte: lockDateStart, $lt: lockDateEnd },
                     status: { $in: ['pending', 'confirmed'] }
-                }).session(session);
+                }).select('_id startTime endTime').session(session);
 
-                if (existingBooking) {
+                const conflictingBooking = sameDayBookings.find((booking) =>
+                    hasOverlap(booking.startTime, booking.endTime, tableLock.startTime, tableLock.endTime)
+                );
+
+                if (conflictingBooking) {
+                    throw new Error('Table was booked by another user while confirming lock');
+                }
+
+                // Double-check for conflicting active locks by other users
+                const sameDayActiveLocks = await TableLock.find({
+                    restaurantId: tableLock.restaurantId,
+                    tableId: tableLock.tableId,
+                    date: { $gte: lockDateStart, $lt: lockDateEnd },
+                    status: 'active',
+                    expiresAt: { $gt: new Date() },
+                    lockId: { $ne: tableLock.lockId }
+                }).select('_id lockId startTime endTime').session(session);
+
+                const conflictingLock = sameDayActiveLocks.find((lock) =>
+                    hasOverlap(lock.startTime, lock.endTime, tableLock.startTime, tableLock.endTime)
+                );
+
+                if (conflictingLock) {
                     throw new Error('Table was booked by another user while confirming lock');
                 }
 
@@ -131,6 +201,7 @@ export async function POST(request) {
                     date: tableLock.date,
                     startTime: tableLock.startTime,
                     endTime: tableLock.endTime,
+                    durationMinutes: inferDurationMinutes(tableLock.startTime, tableLock.endTime),
                     guestCount: tableLock.guestCount,
                     status: 'confirmed',
                     customerName: tableLock.metadata.customerName,

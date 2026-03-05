@@ -3,8 +3,18 @@ import bcrypt from "bcryptjs";
 import { headers } from 'next/headers';
 import dbConnect from "@/lib/mongodb";
 import User from "@/models/user";
-import { adminAuth } from "@/lib/firebase-admin";
 import { NextResponse } from "next/server";
+import jwt from "jsonwebtoken";
+
+const verifyJwtToken = (token) => {
+  try {
+    const secret = process.env.JWT_SECRET || process.env.NEXTAUTH_SECRET;
+    if (!secret) return null;
+    return jwt.verify(token, secret);
+  } catch {
+    return null;
+  }
+};
 
 // Handle preflight requests
 export async function OPTIONS(req) {
@@ -49,31 +59,14 @@ export async function GET(req) {
         });
       }
     } else {
-      // Firebase authentication
-      try {
-        const decoded = await adminAuth.verifyIdToken(token);
-        user = await User.findOne({ firebaseUid: decoded.uid }).select('-password');
-        
-        if (!user) {
-          return NextResponse.json({ 
-            message: "User not found" 
-          }, {
-            status: 404,
-            headers: { 
-              "Content-Type": "application/json",
-              "Access-Control-Allow-Origin": "*",
-              "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
-              "Access-Control-Allow-Headers": "Content-Type, Authorization"
-            },
-          });
-        }
-      } catch (firebaseError) {
-        console.error("Firebase token verification failed:", firebaseError);
-        return NextResponse.json({
-          message: "Invalid token"
-        }, {
-          status: 401
-        });
+      const decoded = verifyJwtToken(token);
+      if (!decoded?.userId) {
+        return NextResponse.json({ message: "Invalid token" }, { status: 401 });
+      }
+
+      user = await User.findById(decoded.userId).select('-password');
+      if (!user) {
+        return NextResponse.json({ message: "User not found" }, { status: 404 });
       }
     }
 
@@ -140,18 +133,11 @@ export async function PUT(req) {
       }
       userQuery = { lineUserId };
     } else {
-      // Firebase authentication
-      try {
-        const decoded = await adminAuth.verifyIdToken(token);
-        userQuery = { firebaseUid: decoded.uid };
-      } catch (firebaseError) {
-        console.error("Firebase token verification failed:", firebaseError);
-        return NextResponse.json({
-          message: "Invalid token"
-        }, {
-          status: 401
-        });
+      const decoded = verifyJwtToken(token);
+      if (!decoded?.userId) {
+        return NextResponse.json({ message: "Invalid token" }, { status: 401 });
       }
+      userQuery = { _id: decoded.userId };
     }
 
     // Get the MongoDB collection directly
@@ -174,22 +160,8 @@ export async function PUT(req) {
         // For LINE users, store password in MongoDB (they don't use Firebase Auth)
         updateDoc.password = await bcrypt.hash(newPassword, 10);
       } else {
-        // For Firebase users, update password through Firebase Admin
-        try {
-          const decoded = await adminAuth.verifyIdToken(token);
-          await adminAuth.updateUser(decoded.uid, {
-            password: newPassword
-          });
-          passwordUpdateResult = 'Firebase password updated successfully';
-          console.log('✅ Firebase password updated for user:', decoded.uid);
-        } catch (firebaseError) {
-          console.error('❌ Firebase password update failed:', firebaseError);
-          return NextResponse.json({
-            message: "Failed to update password. Please try again."
-          }, {
-            status: 500
-          });
-        }
+        updateDoc.password = await bcrypt.hash(newPassword, 10);
+        passwordUpdateResult = 'Password updated successfully';
       }
     }
 

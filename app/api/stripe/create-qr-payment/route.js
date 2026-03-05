@@ -1,10 +1,27 @@
 import Stripe from 'stripe';
 import { NextResponse } from 'next/server';
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
-
 export async function POST(request) {
   try {
+    if (!process.env.STRIPE_SECRET_KEY) {
+      return NextResponse.json(
+        {
+          success: true,
+          manualConfirmation: true,
+          message: 'Payment service unavailable. Booking will be submitted as pending restaurant confirmation.',
+          paymentIntent: {
+            id: `manual_pending_${Date.now()}`,
+            clientSecret: null,
+            amount: 0,
+            currency: 'thb',
+            status: 'pending_manual'
+          }
+        },
+        { status: 200 }
+      );
+    }
+
+    const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
     const { amount, currency = 'thb', metadata = {} } = await request.json();
 
     if (!amount) {
@@ -63,11 +80,20 @@ export async function POST(request) {
     console.error('Error creating QR payment intent:', error);
     
     return NextResponse.json(
-      { 
-        success: false, 
-        error: error.message || 'Failed to create QR payment intent' 
+      {
+        success: true,
+        manualConfirmation: true,
+        message: 'Payment service unavailable. Booking will be submitted as pending restaurant confirmation.',
+        paymentIntent: {
+          id: `manual_pending_${Date.now()}`,
+          clientSecret: null,
+          amount: 0,
+          currency: 'thb',
+          status: 'pending_manual'
+        },
+        error: error.message || 'Failed to create QR payment intent'
       },
-      { status: 500 }
+      { status: 200 }
     );
   }
 }

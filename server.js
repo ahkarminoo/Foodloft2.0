@@ -1,7 +1,7 @@
-const next = require('next');
-const express = require('express');
-const { createServer } = require('http');
-const cors = require('cors');
+import next from 'next';
+import express from 'express';
+import { createServer } from 'http';
+import cors from 'cors';
 
 const dev = process.env.NODE_ENV !== 'production';
 const app = next({ dev });

@@ -7,7 +7,7 @@ import Floorplan from "@/models/Floorplan";
 // RESTAURANT CONFIGURATION
 // ========================================
 // Change this restaurant ID to switch between different restaurants
-const DEFAULT_RESTAURANT_ID = "68d548d7a11657653c2d49ec";
+const DEFAULT_RESTAURANT_ID = process.env.DEFAULT_RESTAURANT_ID || "68d548d7a11657653c2d49ec";
 
 export async function GET() {
   try {

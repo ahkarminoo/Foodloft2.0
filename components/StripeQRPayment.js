@@ -12,6 +12,7 @@ export default function StripeQRPayment({ amount, onSuccess, onError, bookingDet
   const [isPolling, setIsPolling] = useState(false);
   const [timeLeft, setTimeLeft] = useState(600); // 10 minutes in seconds
   const [paymentStatus, setPaymentStatus] = useState('pending');
+  const [isManualFallback, setIsManualFallback] = useState(false);
 
   // Create QR code payment intent
   useEffect(() => {
@@ -41,6 +42,7 @@ export default function StripeQRPayment({ amount, onSuccess, onError, bookingDet
         
         if (data.success) {
           setPaymentIntent(data.paymentIntent);
+          setIsManualFallback(!!data.manualConfirmation);
           
           // For now, use a simple PromptPay QR code format
           // In production, you would integrate with your actual PromptPay account
@@ -62,7 +64,23 @@ export default function StripeQRPayment({ amount, onSuccess, onError, bookingDet
         }
       } catch (error) {
         console.error('Error creating QR payment:', error);
-        onError('Failed to initialize QR payment. Please try again.');
+        setIsManualFallback(true);
+        setPaymentIntent({
+          id: `manual_pending_${Date.now()}`,
+          status: 'pending_manual'
+        });
+
+        const qrCodeData = `https://promptpay.io/0891234567/${amount}`;
+        const qrDataURL = await QRCode.toDataURL(qrCodeData, {
+          width: 200,
+          margin: 1,
+          color: {
+            dark: '#000000',
+            light: '#FFFFFF'
+          }
+        });
+        setQrCodeDataURL(qrDataURL);
+        setIsPolling(true);
       } finally {
         setIsLoading(false);
       }
@@ -196,6 +214,14 @@ export default function StripeQRPayment({ amount, onSuccess, onError, bookingDet
         </div>
 
         {/* Instructions */}
+        {isManualFallback && (
+          <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3 mb-3">
+            <p className="text-yellow-800 text-sm">
+              Payment gateway is temporarily unavailable. You can still continue and your booking will be submitted as pending confirmation by the restaurant.
+            </p>
+          </div>
+        )}
+
         <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
           <div className="flex items-start space-x-3">
             <div className="w-5 h-5 bg-blue-100 rounded-full flex items-center justify-center flex-shrink-0 mt-0.5">

@@ -181,8 +181,11 @@ class DynamicPricingEngine {
 
         const currentBookings = await Booking.find({
             restaurantId,
-            bookingDate: { $gte: dayStart, $lte: dayEnd },
-            status: { $in: ['confirmed', 'pending'] }
+            status: { $in: ['confirmed', 'pending'] },
+            $or: [
+                { date: { $gte: dayStart, $lte: dayEnd } },
+                { bookingDate: { $gte: dayStart, $lte: dayEnd } }
+            ]
         });
 
         // Calculate total restaurant capacity using enhanced data analysis
@@ -197,7 +200,8 @@ class DynamicPricingEngine {
         // Get current occupancy for time slot
         const timeSlotBookings = this.getTimeSlotBookings(currentBookings, time);
         const currentOccupancy = timeSlotBookings.reduce((sum, booking) => sum + booking.guestCount, 0);
-        const occupancyRate = currentOccupancy / restaurantCapacity;
+        const safeCapacity = Math.max(restaurantCapacity || 0, 1);
+        const occupancyRate = Math.min(1, currentOccupancy / safeCapacity);
 
         // Get enhanced historical data
         let historicalData;
@@ -231,7 +235,7 @@ class DynamicPricingEngine {
             guestCount,
             tableCapacity,
             historicalData,
-            bookingLeadTime: this.calculateLeadTime(bookingDate)
+            bookingLeadTime: this.calculateLeadTime(bookingDate, time)
         };
     }
 
@@ -465,10 +469,14 @@ class DynamicPricingEngine {
     }
 
     getTimeSlotBookings(bookings, targetTime) {
-        const targetHour = parseInt(targetTime.split(':')[0]);
+        const targetHour = parseInt(String(targetTime).split(':')[0], 10);
         return bookings.filter(booking => {
-            if (!booking.bookingTime) return false;
-            const bookingHour = parseInt(booking.bookingTime.split(':')[0]);
+            const bookingTime = booking.startTime || booking.bookingTime;
+            if (!bookingTime) return false;
+
+            const bookingHour = parseInt(String(bookingTime).split(':')[0], 10);
+            if (Number.isNaN(bookingHour) || Number.isNaN(targetHour)) return false;
+
             return Math.abs(bookingHour - targetHour) <= 1;
         });
     }
@@ -479,8 +487,20 @@ class DynamicPricingEngine {
 
         const historicalBookings = await Booking.find({
             restaurantId,
-            bookingDate: { $gte: fourWeeksAgo, $lt: date },
-            bookingTime: { $regex: new RegExp(`^${time.split(':')[0]}:`) }
+            $and: [
+                {
+                    $or: [
+                        { date: { $gte: fourWeeksAgo, $lt: date } },
+                        { bookingDate: { $gte: fourWeeksAgo, $lt: date } }
+                    ]
+                },
+                {
+                    $or: [
+                        { startTime: { $regex: new RegExp(`^${time.split(':')[0]}:`) } },
+                        { bookingTime: { $regex: new RegExp(`^${time.split(':')[0]}:`) } }
+                    ]
+                }
+            ]
         }).limit(20);
 
         return historicalBookings;
@@ -495,9 +515,18 @@ class DynamicPricingEngine {
         return 'late';
     }
 
-    calculateLeadTime(bookingDate) {
+    calculateLeadTime(bookingDate, time = '00:00') {
+        const [hoursRaw, minutesRaw] = String(time).split(':');
+        const hours = Number.parseInt(hoursRaw, 10);
+        const minutes = Number.parseInt(minutesRaw, 10);
+
+        const bookingDateTime = new Date(bookingDate);
+        if (!Number.isNaN(hours)) {
+            bookingDateTime.setHours(hours, Number.isNaN(minutes) ? 0 : minutes, 0, 0);
+        }
+
         const now = new Date();
-        const diffMs = bookingDate.getTime() - now.getTime();
+        const diffMs = bookingDateTime.getTime() - now.getTime();
         return Math.max(0, Math.round(diffMs / (1000 * 60 * 60)));
     }
 

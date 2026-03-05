@@ -42,14 +42,22 @@ export default function EnhancedSubscriptionPlans() {
       if (ownerData) {
         try {
           const parsed = JSON.parse(ownerData);
-          ownerId = parsed._id || parsed.id;
+          ownerId = parsed._id || parsed.id || parsed.userId;
         } catch (e) {
           console.error('Failed to parse owner data:', e);
         }
       }
       
       if (!ownerId) {
-        console.warn('No owner ID found, cannot fetch subscription data');
+        setSubscription({
+          planType: 'basic',
+          status: 'active',
+          price: 0,
+          billingCycle: 'month',
+          currency: 'THB'
+        });
+        setCurrentPlan('basic');
+        setUsage(null);
         return;
       }
       

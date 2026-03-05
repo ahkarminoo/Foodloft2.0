@@ -1,4 +1,47 @@
 import mongoose from 'mongoose';
+
+const DEFAULT_BOOKING_DURATION_MINUTES = 120;
+
+function timeToMinutes(timeStr) {
+    if (!timeStr || typeof timeStr !== 'string') return NaN;
+
+    const trimmed = timeStr.trim();
+    const twelveHourMatch = trimmed.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
+    if (twelveHourMatch) {
+        let hours = Number(twelveHourMatch[1]);
+        const minutes = Number(twelveHourMatch[2]);
+        const period = twelveHourMatch[3].toUpperCase();
+
+        if (period === 'PM' && hours !== 12) hours += 12;
+        if (period === 'AM' && hours === 12) hours = 0;
+        return hours * 60 + minutes;
+    }
+
+    const twentyFourHourMatch = trimmed.match(/^(\d{1,2}):(\d{2})$/);
+    if (twentyFourHourMatch) {
+        const hours = Number(twentyFourHourMatch[1]);
+        const minutes = Number(twentyFourHourMatch[2]);
+        return hours * 60 + minutes;
+    }
+
+    return NaN;
+}
+
+function inferDurationMinutes(startTime, endTime) {
+    const start = timeToMinutes(startTime);
+    const end = timeToMinutes(endTime);
+
+    if (Number.isNaN(start) || Number.isNaN(end)) return DEFAULT_BOOKING_DURATION_MINUTES;
+
+    let duration = end - start;
+    if (duration <= 0) duration += 24 * 60;
+
+    if (duration < 30 || duration > 360) {
+        return DEFAULT_BOOKING_DURATION_MINUTES;
+    }
+
+    return duration;
+}
  
 const bookingSchema = new mongoose.Schema({
     bookingRef: {
@@ -58,6 +101,12 @@ const bookingSchema = new mongoose.Schema({
     endTime: {
         type: String,
         required: [true, 'Please provide booking end time']
+    },
+    durationMinutes: {
+        type: Number,
+        min: 30,
+        max: 360,
+        default: DEFAULT_BOOKING_DURATION_MINUTES
     },
     guestCount: {
         type: Number,
@@ -147,6 +196,13 @@ bookingSchema.pre('save', async function(next) {
     }
     next();
 });
+
+bookingSchema.pre('validate', function(next) {
+    if (!this.durationMinutes || this.durationMinutes < 30 || this.durationMinutes > 360) {
+        this.durationMinutes = inferDurationMinutes(this.startTime, this.endTime);
+    }
+    next();
+});
  
 // Indexes for querying bookings efficiently
 bookingSchema.index({ restaurantId: 1, date: 1 });
@@ -183,48 +239,82 @@ bookingSchema.index({ 'lockInfo.lockId': 1 });
 bookingSchema.index({ 'lockInfo.lockExpiresAt': 1 });
  
 // Method to check if table is available for a specific time
-bookingSchema.statics.isTableAvailable = async function(tableId, date, startTime, endTime) {
-    console.log('Checking availability for:', { tableId, date, startTime, endTime });
-   
+bookingSchema.statics.isTableAvailable = async function(tableId, date, startTime, endTime, restaurantId = null, excludeBookingId = null) {
+    console.log('Checking availability for:', { tableId, date, startTime, endTime, restaurantId, excludeBookingId });
+
     const bookingDate = new Date(date);
     bookingDate.setHours(0, 0, 0, 0);
- 
-    // Optimized query using compound index
-    const existingBooking = await this.findOne({
-        tableId: tableId,
-        date: bookingDate,
-        status: { $in: ['pending', 'confirmed'] },
-        $or: [
-            { tableId: tableId },
-            { originalTableId: tableId }
-        ]
-    }).select('_id startTime endTime').lean();
- 
-    if (!existingBooking) {
-        return true; // No bookings found, table is available
-    }
- 
-    // Time overlap check (only if booking exists)
+    const nextDate = new Date(bookingDate);
+    nextDate.setDate(nextDate.getDate() + 1);
+
     const timeToMinutes = (timeStr) => {
-        const [time, period] = timeStr.split(' ');
-        let [hours, minutes] = time.split(':').map(Number);
-        if (period === 'PM' && hours !== 12) hours += 12;
-        if (period === 'AM' && hours === 12) hours = 0;
-        return hours * 60 + minutes;
+        if (!timeStr || typeof timeStr !== 'string') return NaN;
+
+        const trimmed = timeStr.trim();
+        const twelveHourMatch = trimmed.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
+        if (twelveHourMatch) {
+            let hours = Number(twelveHourMatch[1]);
+            const minutes = Number(twelveHourMatch[2]);
+            const period = twelveHourMatch[3].toUpperCase();
+
+            if (period === 'PM' && hours !== 12) hours += 12;
+            if (period === 'AM' && hours === 12) hours = 0;
+            return hours * 60 + minutes;
+        }
+
+        const twentyFourHourMatch = trimmed.match(/^(\d{1,2}):(\d{2})$/);
+        if (twentyFourHourMatch) {
+            const hours = Number(twentyFourHourMatch[1]);
+            const minutes = Number(twentyFourHourMatch[2]);
+            return hours * 60 + minutes;
+        }
+
+        return NaN;
     };
- 
+
     const requestStart = timeToMinutes(startTime);
     const requestEnd = timeToMinutes(endTime);
-    const bookingStart = timeToMinutes(existingBooking.startTime);
-    const bookingEnd = timeToMinutes(existingBooking.endTime);
- 
-    // Check for time overlap
-    const hasOverlap = bookingStart < requestEnd && bookingEnd > requestStart;
- 
-    console.log(`Checking table ${tableId} for date ${bookingDate}:`,
-        hasOverlap ? 'Booked' : 'Available'
-    );
- 
+
+    if (Number.isNaN(requestStart) || Number.isNaN(requestEnd)) {
+        console.warn('Invalid time format in isTableAvailable:', { startTime, endTime });
+        return false;
+    }
+
+    const query = {
+        date: { $gte: bookingDate, $lt: nextDate },
+        status: { $in: ['pending', 'confirmed'] },
+        $or: [
+            { tableId },
+            { originalTableId: tableId }
+        ]
+    };
+
+    if (restaurantId) {
+        query.restaurantId = restaurantId;
+    }
+
+    if (excludeBookingId) {
+        query._id = { $ne: excludeBookingId };
+    }
+
+    const existingBookings = await this.find(query)
+        .select('_id startTime endTime tableId originalTableId')
+        .lean();
+
+    if (existingBookings.length === 0) {
+        return true;
+    }
+
+    const hasOverlap = existingBookings.some((booking) => {
+        const bookingStart = timeToMinutes(booking.startTime);
+        const bookingEnd = timeToMinutes(booking.endTime);
+
+        if (Number.isNaN(bookingStart) || Number.isNaN(bookingEnd)) return false;
+        return bookingStart < requestEnd && bookingEnd > requestStart;
+    });
+
+    console.log(`Checking table ${tableId} for date ${bookingDate.toISOString().split('T')[0]}:`, hasOverlap ? 'Booked' : 'Available');
+
     return !hasOverlap;
 };
  

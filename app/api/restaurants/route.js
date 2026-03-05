@@ -8,11 +8,34 @@ import Subscription from "@/models/Subscription";
 // Add a verifyToken function if you don't have it imported
 const verifyToken = (token) => {
   try {
-    return jwt.verify(token, process.env.JWT_SECRET);
+    const secret = process.env.JWT_SECRET || process.env.NEXTAUTH_SECRET;
+    if (!secret) return null;
+    return jwt.verify(token, secret);
   } catch (error) {
     console.error('Token verification error:', error);
     return null;
   }
+};
+
+const normalizeLocation = (location) => {
+  if (!location) return { address: "", placeId: "", coordinates: { lat: null, lng: null } };
+
+  if (typeof location === "string") {
+    return {
+      address: location,
+      placeId: "",
+      coordinates: { lat: null, lng: null }
+    };
+  }
+
+  return {
+    address: location.address || "",
+    placeId: location.placeId || "",
+    coordinates: {
+      lat: location.coordinates?.lat ?? null,
+      lng: location.coordinates?.lng ?? null
+    }
+  };
 };
 
 // ✅ POST: Create new restaurant profile
@@ -26,7 +49,10 @@ export async function POST(req) {
     }
 
     const token = authHeader.split(" ")[1];
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const decoded = verifyToken(token);
+    if (!decoded) {
+      return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
+    }
     const ownerId = decoded.userId;
 
     // Get owner and check SaaS limits through organization
@@ -91,8 +117,7 @@ export async function POST(req) {
     console.log("Contact number from request:", restaurantData.contactNumber || "NOT PROVIDED");
     
     // Validate required fields
-    if (!restaurantData.restaurantName || !restaurantData.cuisineType || 
-        !restaurantData.location || !restaurantData.description) {
+    if (!restaurantData.restaurantName || !restaurantData.cuisineType || !restaurantData.description) {
       return NextResponse.json({ message: "Missing required fields" }, { status: 400 });
     }
 
@@ -101,7 +126,7 @@ export async function POST(req) {
       ownerId,
       restaurantName: restaurantData.restaurantName,
       cuisineType: restaurantData.cuisineType,
-      location: restaurantData.location,
+      location: normalizeLocation(restaurantData.location),
       description: restaurantData.description,
       contactNumber: restaurantData.contactNumber || "", // Default to empty string if not provided
       openingHours: restaurantData.openingHours || {},
@@ -142,7 +167,10 @@ export async function GET(req) {
     }
 
     const token = authHeader.split(" ")[1];
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const decoded = verifyToken(token);
+    if (!decoded) {
+      return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
+    }
     const ownerId = decoded.userId;
 
     // Find single restaurant by owner ID
@@ -182,7 +210,10 @@ export async function PUT(req) {
     }
 
     const token = authHeader.split(" ")[1];
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const decoded = verifyToken(token);
+    if (!decoded) {
+      return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
+    }
     const ownerId = decoded.userId;
     
     // Get restaurant data from request body
@@ -209,7 +240,7 @@ export async function PUT(req) {
     const updateFields = {};
     if (restaurantName) updateFields.restaurantName = restaurantName;
     if (cuisineType) updateFields.cuisineType = cuisineType;
-    if (location) updateFields.location = location;
+    if (location !== undefined) updateFields.location = normalizeLocation(location);
     if (description) updateFields.description = description;
     if (contactNumber !== undefined) updateFields.contactNumber = contactNumber;
     if (openingHours) updateFields.openingHours = openingHours;

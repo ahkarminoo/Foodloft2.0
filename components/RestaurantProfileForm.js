@@ -410,7 +410,7 @@ export default function RestaurantProfileForm({
           {/* Location */}
           <div className="bg-white rounded-xl shadow-sm p-6">
             <label className="block text-sm font-semibold text-gray-900 mb-4">
-              Restaurant Location *
+              Restaurant Location (Optional)
             </label>
             <LocationSelector
               onLocationSelect={handleLocationSelect}

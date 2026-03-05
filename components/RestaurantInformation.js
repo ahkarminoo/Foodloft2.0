@@ -9,6 +9,23 @@ import RestaurantProfileForm from './RestaurantProfileForm';
 import MenuImageUpload from './MenuImageUpload';
 import ImageUpload from './ImageUpload';
 
+function toLatLngLiteral(coordinates) {
+  if (!coordinates) return null;
+
+  if (Array.isArray(coordinates) && coordinates.length >= 2) {
+    const lng = Number(coordinates[0]);
+    const lat = Number(coordinates[1]);
+    if (Number.isFinite(lat) && Number.isFinite(lng)) return { lat, lng };
+    return null;
+  }
+
+  const lat = Number(coordinates.lat ?? coordinates.latitude);
+  const lng = Number(coordinates.lng ?? coordinates.lon ?? coordinates.longitude);
+  if (Number.isFinite(lat) && Number.isFinite(lng)) return { lat, lng };
+
+  return null;
+}
+
 const formatOpeningHours = (hours) => {
   if (!hours || typeof hours !== 'object') return [];
   const days = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
@@ -45,6 +62,8 @@ export default function RestaurantInformation({ restaurant, onEditClick, onUpdat
     : restaurant?.images?.menu 
       ? [restaurant.images.menu] 
       : [];
+
+  const restaurantCoordinates = toLatLngLiteral(restaurant?.location?.coordinates);
 
   console.log('DEBUG - Menu Images:', {
     original: restaurant?.images?.menu,
@@ -179,14 +198,14 @@ export default function RestaurantInformation({ restaurant, onEditClick, onUpdat
               Location
             </h3>
             <p className="text-gray-600 mb-4">{restaurant.location.address}</p>
-            {restaurant.location.coordinates && (
+            {restaurantCoordinates && (
               <div className="h-[300px] rounded-lg overflow-hidden">
                 <GoogleMap
                   mapContainerStyle={{ width: '100%', height: '100%' }}
-                  center={restaurant.location.coordinates}
+                  center={restaurantCoordinates}
                   zoom={15}
                 >
-                  <Marker position={restaurant.location.coordinates} />
+                  <Marker position={restaurantCoordinates} />
                 </GoogleMap>
               </div>
             )}

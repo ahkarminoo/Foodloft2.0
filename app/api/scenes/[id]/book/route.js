@@ -8,6 +8,7 @@ import User from '@/models/user'; // Import the User model
 import { notifyStaffOfNewBooking } from '@/lib/lineNotificationService';
 import Subscription from '@/models/Subscription'; // Import the Subscription model
 import { verifyFirebaseAuth } from "@/lib/firebase-admin";
+import jwt from 'jsonwebtoken';
 
 // Helper function to ensure user exists in MongoDB
 async function ensureUserExists(firebaseUid, email) {
@@ -75,6 +76,7 @@ export async function POST(request, { params }) {
       date, 
       startTime,    // Now receiving startTime directly
       endTime,      // Now receiving endTime directly
+      durationMinutes,
       guestCount, 
       restaurantId,
       customerData
@@ -243,21 +245,33 @@ export async function POST(request, { params }) {
       console.log('LINE user lookup for:', lineUserId);
       currentUser = await User.findOne({ lineUserId });
     } else {
-      // Firebase user authentication
       try {
-        const authResult = await verifyFirebaseAuth(request);
-        if (!authResult.success) {
-          return NextResponse.json({ error: authResult.error }, { status: 401 });
+        const secret = process.env.JWT_SECRET || process.env.NEXTAUTH_SECRET;
+        if (!secret) {
+          return NextResponse.json({ error: 'JWT secret is not configured' }, { status: 500 });
         }
 
-        const { firebaseUid, email } = authResult;
-        currentUser = await ensureUserExists(firebaseUid, email);
-      } catch (firebaseError) {
-        console.error('Firebase token verification failed:', firebaseError);
-        return NextResponse.json({ 
-          error: "Invalid token", 
-          details: "Firebase verification failed" 
-        }, { status: 401 });
+        const decoded = jwt.verify(token, secret);
+        currentUser = await User.findById(decoded.userId);
+
+        if (!currentUser) {
+          return NextResponse.json({ error: 'User not found' }, { status: 404 });
+        }
+      } catch {
+        try {
+          const authResult = await verifyFirebaseAuth(request);
+          if (!authResult.success) {
+            return NextResponse.json({ error: authResult.error }, { status: 401 });
+          }
+          const { firebaseUid, email } = authResult;
+          currentUser = await ensureUserExists(firebaseUid, email);
+        } catch (firebaseError) {
+          console.error('Token verification failed:', firebaseError);
+          return NextResponse.json({
+            error: "Invalid token",
+            details: "Token verification failed"
+          }, { status: 401 });
+        }
       }
     }
     if (!currentUser) {
@@ -359,7 +373,7 @@ export async function POST(request, { params }) {
     try {
       await session.withTransaction(async () => {
         // Double-check table availability within transaction
-        const isAvailable = await Booking.isTableAvailable(tableId, date, startTime, endTime);
+        const isAvailable = await Booking.isTableAvailable(tableId, date, startTime, endTime, restaurantId);
         if (!isAvailable) {
           throw new Error('Table is no longer available for the selected time slot');
         }
@@ -373,6 +387,7 @@ export async function POST(request, { params }) {
           date: new Date(date),
           startTime,
           endTime,
+          durationMinutes,
           guestCount,
           status: 'pending',
           customerName: customerName,

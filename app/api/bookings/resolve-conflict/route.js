@@ -113,7 +113,9 @@ async function resolveBookingConflict(bookingId, resolution, newTimeSlot, reason
                 booking.tableId,
                 newTimeSlot.date,
                 newTimeSlot.startTime,
-                newTimeSlot.endTime
+                newTimeSlot.endTime,
+                booking.restaurantId,
+                booking._id
             );
 
             if (!isAvailable) {

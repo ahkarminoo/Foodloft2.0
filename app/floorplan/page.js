@@ -4,9 +4,8 @@ import { useEffect, useRef, useState, Suspense } from "react";
 import { useRouter, useSearchParams } from 'next/navigation';
 import Head from "next/head";
 import * as THREE from 'three';
-import { createScene, createFloor, initializeOrbitControls } from '@/scripts/floor';
+import { createScene, createFloor } from '@/scripts/floor';
 import { UIManager } from '@/scripts/managers/UIManager';
-import { DragManager } from '@/scripts/managers/DragManager';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls';
 import { FaBoxOpen, FaTrash, FaArrowsAltH, FaSave } from "react-icons/fa";
 import styles from "@/css/ui.css";
@@ -187,14 +186,10 @@ function FloorplanContent() {
         uiManager.wallManager.isAddWallMode = false;
         uiManager.wallManager.previewWall.visible = false;
 
-        // Initialize just the dragManager
-        const dragManager = new DragManager(uiManager);
-        uiManager.dragManager = dragManager;
-
         // Add to managersRef for cleanup
         managersRef.current = {
           uiManager,
-          dragManager
+          dragManager: uiManager.dragManager
         };
 
         // Animation Loop

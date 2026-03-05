@@ -3,9 +3,12 @@ import dbConnect from "@/lib/mongodb";
 import Restaurant from "@/models/Restaurants";
 
 export async function GET() {
-  await dbConnect();
+  if (!process.env.MONGODB_URI) {
+    return NextResponse.json({ restaurants: [] }, { status: 200 });
+  }
 
   try {
+    await dbConnect();
     const restaurants = await Restaurant.find({})
       .select('restaurantName cuisineType location description openingHours images')
       .lean();

@@ -1,5 +1,7 @@
 'use client';
 
+/* eslint-disable react-hooks/exhaustive-deps */
+
 import { useEffect, useRef, useState, useCallback } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls';
@@ -18,7 +20,6 @@ import { performanceMonitor, measurePerformance } from '@/utils/performance';
 import { handleSceneError } from '@/utils/errorHandler';
 import { useFirebaseAuth } from '@/contexts/FirebaseAuthContext';
 import { useAuth } from '@/context/AuthContext';
-import { auth } from "@/lib/firebase-config";
 import '@/css/loading.css';
 import PaymentDialog from './PaymentDialog';
 
@@ -93,6 +94,9 @@ function BookingConfirmationDialog({ bookingDetails, onClose, onConfirm }) {
                 <div className="min-w-0 flex-1">
                   <p className="text-xs sm:text-sm text-gray-500">Time</p>
                   <p className="font-semibold text-gray-800 text-sm sm:text-base truncate">{bookingDetails.time}</p>
+                  {bookingDetails.durationMinutes ? (
+                    <p className="text-xs text-gray-500 mt-1">Duration: {bookingDetails.durationMinutes} minutes</p>
+                  ) : null}
                 </div>
               </div>
             </div>
@@ -201,6 +205,10 @@ export default function PublicFloorPlan({ floorplanData, floorplanId, restaurant
   }, [floorplanId]);
 
   const containerRef = useRef(null);
+  const sceneHostRef = useRef(null);
+  const bookingPanelRef = useRef(null);
+  const floorplanShellRef = useRef(null);
+  const timeSlotsRef = useRef(null);
   const sceneRef = useRef(null);
   const rendererRef = useRef(null);
   const animationFrameRef = useRef(null);
@@ -213,32 +221,22 @@ export default function PublicFloorPlan({ floorplanData, floorplanId, restaurant
     return today.toISOString().split('T')[0];
   });
   const [selectedTime, setSelectedTime] = useState('');
+  const [selectedDuration, setSelectedDuration] = useState(120);
   const [availableTimeSlots, setAvailableTimeSlots] = useState([]);
   const [restaurant, setRestaurant] = useState(null);
   const [availableTables, setAvailableTables] = useState(new Set());
+  const [isAvailabilityLoading, setIsAvailabilityLoading] = useState(false);
+
+  const durationOptions = [
+    { value: 60, label: '1 hour' },
+    { value: 90, label: '1.5 hours' },
+    { value: 120, label: '2 hours' }
+  ];
 
   // Helper function to get the appropriate auth token
   const getAuthToken = async () => {
     try {
-      const storedUser = localStorage.getItem('customerUser');
-      if (storedUser) {
-        const userData = JSON.parse(storedUser);
-        if (userData.isLineUser && userData.lineUserId) {
-          // Return LINE user token format
-          return `line.${userData.lineUserId}`;
-        }
-      }
-      
-      // Check if user is authenticated with Firebase
-      if (auth.currentUser) {
-        // Return Firebase token for regular users
-        const token = await auth.currentUser.getIdToken();
-        console.log('Firebase token generated successfully');
-        return token;
-      } else {
-        console.warn('No Firebase user found, user may need to login');
-        return null;
-      }
+      return await lineAuth.getAuthToken();
     } catch (error) {
       console.error('Error getting auth token:', error);
       return null;
@@ -294,11 +292,7 @@ export default function PublicFloorPlan({ floorplanData, floorplanId, restaurant
 
   // Log initial mount state
   useEffect(() => {
-    console.log('🎯 PublicFloorPlan mounted with initial auth state:', {
-      authLoading,
-      isAuthenticated,
-      hasUserProfile: !!userProfile
-    });
+    console.log('🎯 PublicFloorPlan mounted with initial auth state:', initialAuthSnapshotRef.current);
   }, []);
 
 
@@ -316,6 +310,11 @@ export default function PublicFloorPlan({ floorplanData, floorplanId, restaurant
 
   const dateRef = useRef(selectedDate);
   const timeRef = useRef(selectedTime);
+  const initialAuthSnapshotRef = useRef({
+    authLoading,
+    isAuthenticated,
+    hasUserProfile: !!userProfile
+  });
 
   // Skip asset preloading and go straight to 3D scene loading for better UX
   useEffect(() => {
@@ -333,11 +332,13 @@ export default function PublicFloorPlan({ floorplanData, floorplanId, restaurant
     timeRef.current = selectedTime;
   }, [selectedTime]);
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     // Only log in development
     if (process.env.NODE_ENV === 'development') {
       console.log('PublicFloorPlan useEffect triggered with:', {
         containerRef: !!containerRef.current,
+        sceneHostRef: !!sceneHostRef.current,
         floorplanData: !!floorplanData,
         floorplanDataObjects: floorplanData?.objects?.length,
         containerDimensions: containerRef.current ? {
@@ -347,10 +348,11 @@ export default function PublicFloorPlan({ floorplanData, floorplanId, restaurant
       });
     }
 
-    if (!containerRef.current || !floorplanData) {
+    if (!containerRef.current || !sceneHostRef.current || !floorplanData) {
       if (process.env.NODE_ENV === 'development') {
         console.log('Missing required refs or data, skipping initialization', {
           containerRef: !!containerRef.current,
+          sceneHostRef: !!sceneHostRef.current,
           floorplanData: !!floorplanData,
           floorplanDataObjects: floorplanData?.objects?.length
         });
@@ -397,17 +399,21 @@ export default function PublicFloorPlan({ floorplanData, floorplanId, restaurant
       }
 
       // Dispose renderer
+      const rendererElement = rendererRef.current?.domElement;
       if (rendererRef.current) {
         rendererRef.current.dispose();
         rendererRef.current.forceContextLoss();
         rendererRef.current = null;
       }
       
-      // Clear the container more safely
-      if (containerRef.current) {
-        while (containerRef.current.firstChild) {
-          containerRef.current.removeChild(containerRef.current.firstChild);
-        }
+      // Remove imperatively mounted nodes only
+      if (loadingOverlayRef.current && sceneHostRef.current?.contains(loadingOverlayRef.current)) {
+        sceneHostRef.current.removeChild(loadingOverlayRef.current);
+      }
+      loadingOverlayRef.current = null;
+
+      if (rendererElement && sceneHostRef.current?.contains(rendererElement)) {
+        sceneHostRef.current.removeChild(rendererElement);
       }
     };
 
@@ -451,7 +457,7 @@ export default function PublicFloorPlan({ floorplanData, floorplanId, restaurant
             <div class="loading-message" id="loading-message">Setting up scene...</div>
           </div>
         `;
-        containerRef.current.appendChild(loadingOverlay);
+        sceneHostRef.current.appendChild(loadingOverlay);
         loadingOverlayRef.current = loadingOverlay;
 
         // Update loading progress function
@@ -497,7 +503,7 @@ export default function PublicFloorPlan({ floorplanData, floorplanId, restaurant
           renderer.shadowMap.enabled = false;
         }
         
-        containerRef.current.appendChild(renderer.domElement);
+        sceneHostRef.current.appendChild(renderer.domElement);
 
         // Scene Initialization
         console.log('Creating scene');
@@ -1266,7 +1272,7 @@ export default function PublicFloorPlan({ floorplanData, floorplanId, restaurant
           if (!dayHours.isClosed) {
             // Pass today's date to filter out past time slots
             const todayDateString = today.toISOString().split('T')[0];
-            const timeSlots = generateTimeSlots(dayHours.open, dayHours.close, todayDateString);
+            const timeSlots = generateTimeSlots(dayHours.open, dayHours.close, todayDateString, selectedDuration);
             setAvailableTimeSlots(timeSlots);
           }
         }
@@ -1275,9 +1281,9 @@ export default function PublicFloorPlan({ floorplanData, floorplanId, restaurant
       }
     };
     fetchRestaurantDetails();
-  }, [restaurantId]);
+  }, [restaurantId, selectedDuration]);
 
-  const generateTimeSlots = (openTime, closeTime, selectedDate = null) => {
+  const generateTimeSlots = (openTime, closeTime, selectedDate = null, durationMinutes = 120) => {
     const slots = [];
     
     const parseTime = (timeStr) => {
@@ -1303,7 +1309,8 @@ export default function PublicFloorPlan({ floorplanData, floorplanId, restaurant
     const end = new Date();
     const [closeHours, closeMinutes] = formattedCloseTime.split(':').map(Number);
     end.setHours(closeHours, closeMinutes, 0);
-    end.setHours(end.getHours() - 2);
+    const bookingDurationMs = durationMinutes * 60 * 1000;
+    const latestStartTime = new Date(end.getTime() - bookingDurationMs);
 
     // If it's today, ensure we start from current time or opening time, whichever is later
     if (isToday) {
@@ -1323,14 +1330,14 @@ export default function PublicFloorPlan({ floorplanData, floorplanId, restaurant
       }
     }
 
-    while (current <= end) {
+    while (current <= latestStartTime) {
         const startTime = current.toLocaleTimeString('en-US', {
             hour: 'numeric',
             minute: '2-digit',
             hour12: true
         });
         
-        const endTime = new Date(current.getTime() + (2 * 60 * 60 * 1000)).toLocaleTimeString('en-US', {
+        const endTime = new Date(current.getTime() + bookingDurationMs).toLocaleTimeString('en-US', {
             hour: 'numeric',
             minute: '2-digit',
             hour12: true
@@ -1365,13 +1372,36 @@ export default function PublicFloorPlan({ floorplanData, floorplanId, restaurant
         return;
       }
 
-      const timeSlots = generateTimeSlots(dayHours.open, dayHours.close, formattedDate);
+      const timeSlots = generateTimeSlots(dayHours.open, dayHours.close, formattedDate, selectedDuration);
       setAvailableTimeSlots(timeSlots);
     } catch (error) {
       console.error('Error generating time slots:', error);
       setAvailableTimeSlots([]);
     }
   };
+
+  useEffect(() => {
+    if (!selectedDate || !restaurant?.openingHours) return;
+
+    const dateObj = new Date(selectedDate);
+    const dayOfWeek = dateObj.toLocaleDateString('en-US', { weekday: 'long' }).toLowerCase();
+    const dayHours = restaurant.openingHours[dayOfWeek];
+
+    if (!dayHours || dayHours.isClosed) {
+      setAvailableTimeSlots([]);
+      setSelectedTime('');
+      return;
+    }
+
+    const slots = generateTimeSlots(dayHours.open, dayHours.close, selectedDate, selectedDuration);
+    setAvailableTimeSlots(slots);
+
+    setSelectedTime((previousTime) => {
+      if (slots.includes(previousTime)) return previousTime;
+      setAvailableTables(new Set());
+      return '';
+    });
+  }, [selectedDate, selectedDuration, restaurant]);
 
   const handleBookingSubmission = async (table, tableId, bookingDetails) => {
     // The `userProfile` from the context is now the single source of truth.
@@ -1400,6 +1430,7 @@ export default function PublicFloorPlan({ floorplanData, floorplanId, restaurant
         date: dateRef.current,
         startTime: startTime.trim(),
         endTime: endTime.trim(),
+        durationMinutes: selectedDuration,
         guestCount: bookingDetails.guestCount,
         restaurantId,
         customerData: customer
@@ -1443,6 +1474,7 @@ export default function PublicFloorPlan({ floorplanData, floorplanId, restaurant
             restaurantId,
             date: dateRef.current,
             time: timeRef.current,
+            durationMinutes: selectedDuration,
             tableId,
             guestCount: bookingDetails.guestCount,
             tableCapacity: table.userData?.capacity || (bookingDetails.guestCount <= 2 ? 2 : bookingDetails.guestCount <= 4 ? 4 : 6),
@@ -1479,6 +1511,7 @@ export default function PublicFloorPlan({ floorplanData, floorplanId, restaurant
             restaurantId,
             date: dateRef.current,
             time: timeRef.current,
+            durationMinutes: selectedDuration,
             tableId,
             guestCount: bookingDetails.guestCount,
             tableCapacity: table.userData?.capacity || (bookingDetails.guestCount <= 2 ? 2 : bookingDetails.guestCount <= 4 ? 4 : 6),
@@ -1538,12 +1571,24 @@ export default function PublicFloorPlan({ floorplanData, floorplanId, restaurant
         });
     }
 
-    // Update available tables set
+    // Update local availability immediately
     setAvailableTables(prev => {
-        const newSet = new Set(prev);
-        newSet.delete(tableId);
-        return newSet;
+        if (prev.size === 0 && Array.isArray(floorplanData?.objects)) {
+          const allTableIds = floorplanData.objects
+            .filter(obj => obj.type === 'table' || obj.objectId?.startsWith('t'))
+            .map(obj => obj.objectId);
+          const next = new Set(allTableIds);
+          next.delete(tableId);
+          return next;
+        }
+
+        const next = new Set(prev);
+        next.delete(tableId);
+        return next;
     });
+
+    // Re-fetch availability for the same date/time to keep colors/status in sync
+    await checkTableAvailability(dateRef.current, timeRef.current);
 
     // Enhanced success notification
     toast.success('🎉 Booking submitted successfully!', {
@@ -1616,11 +1661,6 @@ export default function PublicFloorPlan({ floorplanData, floorplanId, restaurant
     console.log('Time state updated:', selectedTime);
   }, [selectedTime]);
 
-  // Add this debug log
-  useEffect(() => {
-    console.log('Component mounted/updated with time:', selectedTime);
-  }, []);
-
   // Add this function to check availability
   const checkTableAvailability = async (date, timeSlot) => {
     if (!date || !timeSlot) {
@@ -1629,6 +1669,7 @@ export default function PublicFloorPlan({ floorplanData, floorplanId, restaurant
     }
 
     const [startTime, endTime] = timeSlot.split(' - ');
+    setIsAvailabilityLoading(true);
 
     try {
         console.log('1. Sending availability check:', { 
@@ -1682,6 +1723,8 @@ export default function PublicFloorPlan({ floorplanData, floorplanId, restaurant
         // In case of error, assume all tables are available
         setAvailableTables(new Set([]));
         toast.error('Error checking table availability. Assuming all tables are available.');
+    } finally {
+        setIsAvailabilityLoading(false);
     }
   };
 
@@ -1705,11 +1748,44 @@ export default function PublicFloorPlan({ floorplanData, floorplanId, restaurant
   };
 
   // Make sure this useEffect is present to trigger availability check when date/time changes
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (selectedDate && selectedTime) {
         checkTableAvailability(selectedDate, selectedTime);
     }
   }, [selectedDate, selectedTime]);
+
+  useEffect(() => {
+    if (!sceneLoaded) return;
+
+    const ctx = gsap.context(() => {
+      gsap.fromTo(
+        bookingPanelRef.current,
+        { opacity: 0, y: -10 },
+        { opacity: 1, y: 0, duration: 0.45, ease: 'power2.out' }
+      );
+
+      gsap.fromTo(
+        floorplanShellRef.current,
+        { opacity: 0, scale: 0.985 },
+        { opacity: 1, scale: 1, duration: 0.55, ease: 'power2.out' }
+      );
+    });
+
+    return () => ctx.revert();
+  }, [sceneLoaded]);
+
+  useEffect(() => {
+    if (!timeSlotsRef.current || availableTimeSlots.length === 0) return;
+
+    const buttons = timeSlotsRef.current.querySelectorAll('.time-slot-btn');
+    gsap.killTweensOf(buttons);
+    gsap.fromTo(
+      buttons,
+      { opacity: 0, y: 8 },
+      { opacity: 1, y: 0, duration: 0.24, stagger: 0.018, ease: 'power2.out' }
+    );
+  }, [availableTimeSlots, selectedDate, selectedDuration]);
 
   const updateTableColors = useCallback(() => {
     if (!sceneRef.current) return;
@@ -1829,6 +1905,7 @@ export default function PublicFloorPlan({ floorplanData, floorplanId, restaurant
   `;
 
   // Add the styles to the document
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     const style = document.createElement('style');
     style.textContent = dateSliderStyles;
@@ -1933,6 +2010,7 @@ export default function PublicFloorPlan({ floorplanData, floorplanId, restaurant
   `;
 
   // Add the styles to the document
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     const style = document.createElement('style');
     style.textContent = timeSlotStyles;
@@ -1996,6 +2074,7 @@ export default function PublicFloorPlan({ floorplanData, floorplanId, restaurant
   `;
 
   // Add table hover tooltip styles to the document
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     const style = document.createElement('style');
     style.id = 'public-floorplan-tooltip-styles'; // Add unique ID
@@ -2131,7 +2210,7 @@ export default function PublicFloorPlan({ floorplanData, floorplanId, restaurant
 }
       `}</style>
 
-      <div className="booking-panel">
+      <div className="booking-panel" ref={bookingPanelRef}>
         <div className="booking-columns-container">
           {/* Date Selection with Slider */}
           <div className="date-slider">
@@ -2193,6 +2272,36 @@ export default function PublicFloorPlan({ floorplanData, floorplanId, restaurant
 
           {/* Time Selection with Slider */}
           <div className="booking-column">
+            <div className="mb-3">
+              <label className="block text-sm font-medium text-[#141517] mb-2">Duration</label>
+              <div className="relative inline-flex w-full md:w-auto rounded-xl bg-[#fff5f2] p-1 border border-[#ffd8c9] shadow-sm overflow-x-auto">
+                {durationOptions.map((option) => {
+                  const isSelected = selectedDuration === option.value;
+
+                  return (
+                    <motion.button
+                      key={option.value}
+                      type="button"
+                      onClick={() => setSelectedDuration(option.value)}
+                      whileHover={{ y: -1 }}
+                      whileTap={{ scale: 0.98 }}
+                      className={`relative z-10 px-3 py-2 rounded-lg text-sm font-semibold whitespace-nowrap transition-colors ${
+                        isSelected ? 'text-white' : 'text-[#7a341f] hover:text-[#FF4F18]'
+                      }`}
+                    >
+                      {isSelected && (
+                        <motion.span
+                          layoutId="duration-pill"
+                          className="absolute inset-0 rounded-lg bg-gradient-to-r from-[#FF4F18] to-[#FF6B35] shadow-md"
+                          transition={{ type: 'spring', stiffness: 350, damping: 30 }}
+                        />
+                      )}
+                      <span className="relative">{option.label}</span>
+                    </motion.button>
+                  );
+                })}
+              </div>
+            </div>
             <h4 className="text-lg font-semibold mb-3 text-[#FF4F18]">Available Times</h4>
             <div className="time-slots-slider">
               <button 
@@ -2205,16 +2314,32 @@ export default function PublicFloorPlan({ floorplanData, floorplanId, restaurant
                 ←
               </button>
               
-              <div className="time-slots-container">
-                {availableTimeSlots.map((slot) => (
-                  <button
-                    key={slot}
-                    onClick={() => handleTimeSlotSelection(slot)}
-                    className={`time-slot-btn ${selectedTime === slot ? 'selected' : ''}`}
+              <div className="time-slots-container" ref={timeSlotsRef}>
+                <AnimatePresence mode="wait">
+                  <motion.div
+                    key={`${selectedDate}-${selectedDuration}`}
+                    initial={{ opacity: 0, y: 6 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -6 }}
+                    transition={{ duration: 0.2 }}
+                    className="flex gap-2"
                   >
-                    {slot}
-                  </button>
-                ))}
+                    {availableTimeSlots.map((slot, index) => (
+                      <motion.button
+                        key={slot}
+                        initial={{ opacity: 0, y: 10 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        transition={{ delay: Math.min(index * 0.02, 0.2), duration: 0.2 }}
+                        whileHover={{ y: -2 }}
+                        whileTap={{ scale: 0.98 }}
+                        onClick={() => handleTimeSlotSelection(slot)}
+                        className={`time-slot-btn ${selectedTime === slot ? 'selected' : ''}`}
+                      >
+                        {slot}
+                      </motion.button>
+                    ))}
+                  </motion.div>
+                </AnimatePresence>
               </div>
 
               <button 
@@ -2232,9 +2357,28 @@ export default function PublicFloorPlan({ floorplanData, floorplanId, restaurant
       </div>
 
       {/* Floor Plan Container with Loading State */}
-      <div className="floorplan-container" ref={containerRef}>
+      <div className="floorplan-container" ref={(node) => { containerRef.current = node; floorplanShellRef.current = node; }}>
+        <AnimatePresence>
+          {isAvailabilityLoading && selectedTime && (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="absolute top-3 right-3 z-40"
+            >
+              <div className="bg-white/90 backdrop-blur-md border border-[#FF4F18]/20 rounded-xl px-3 py-2 shadow-lg">
+                <div className="flex items-center gap-2 text-[#141517] text-sm font-medium">
+                  <span className="inline-block w-2 h-2 rounded-full bg-[#FF4F18] animate-pulse"></span>
+                  Syncing table status...
+                </div>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
         {/* Scene Container */}
-        <div className="scene-container w-full h-full">
+        <div className="scene-container relative w-full h-full">
+          <div ref={sceneHostRef} className="absolute inset-0" />
           {!sceneLoaded && (
             <div className="absolute inset-0 flex items-center justify-center bg-black/50 z-50">
               <div className="loading-spinner"></div>

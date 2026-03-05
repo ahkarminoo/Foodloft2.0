@@ -18,22 +18,26 @@ export const metadata = {
 };
 
 export default function RootLayout({ children }) {
+  const googleMapsApiKey = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY;
+
   return (
     <html lang="en">
       <body className={inter.className}>
-        <Script
-          id="google-maps"
-          strategy="beforeInteractive"
-          src={`https://maps.googleapis.com/maps/api/js?key=${process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY}&libraries=places`}
-        />
-        <FirebaseAuthProvider>
-          <AuthProvider>
+        {googleMapsApiKey ? (
+          <Script
+            id="google-maps"
+            strategy="beforeInteractive"
+            src={`https://maps.googleapis.com/maps/api/js?key=${googleMapsApiKey}&libraries=places`}
+          />
+        ) : null}
+        <AuthProvider>
+          <FirebaseAuthProvider>
             <GoogleMapsProvider>
               {children}
               <Toaster position="bottom-center" />
             </GoogleMapsProvider>
-          </AuthProvider>
-        </FirebaseAuthProvider>
+          </FirebaseAuthProvider>
+        </AuthProvider>
       </body>
     </html>
   );

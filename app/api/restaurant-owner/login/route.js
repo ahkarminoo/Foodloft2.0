@@ -8,6 +8,14 @@ import Restaurant from "@/models/Restaurants";
 export async function POST(req) {
   try {
     const { email, password, firebaseUid } = await req.json();
+    const jwtSecret = process.env.JWT_SECRET || process.env.NEXTAUTH_SECRET;
+
+    if (!jwtSecret) {
+      return NextResponse.json(
+        { error: "JWT secret is not configured. Set JWT_SECRET or NEXTAUTH_SECRET." },
+        { status: 500 }
+      );
+    }
 
     // Handle Firebase authentication (Google sign-in)
     if (firebaseUid) {
@@ -30,7 +38,7 @@ export async function POST(req) {
           role: "restaurantOwner",
           hasRestaurant 
         },
-        process.env.JWT_SECRET,
+        jwtSecret,
         { expiresIn: "2h" }
       );
 
@@ -38,6 +46,8 @@ export async function POST(req) {
         message: "Login successful",
         token,
         user: {
+          _id: owner._id,
+          id: owner._id,
           userId: owner._id,
           email: owner.email,
           firstName: owner.firstName,
@@ -58,7 +68,8 @@ export async function POST(req) {
 
     await dbConnect();
 
-    const owner = await RestaurantOwner.findOne({ email });
+    const normalizedEmail = String(email).trim().toLowerCase();
+    const owner = await RestaurantOwner.findOne({ email: normalizedEmail });
     if (!owner) {
       return NextResponse.json({ error: "Restaurant owner not found" }, { status: 404 });
     }
@@ -68,7 +79,18 @@ export async function POST(req) {
       return NextResponse.json({ error: "Please use Google sign-in for this account" }, { status: 400 });
     }
 
-    const isPasswordMatch = await bcrypt.compare(password, owner.password);
+    let isPasswordMatch = false;
+
+    try {
+      isPasswordMatch = await bcrypt.compare(password, owner.password);
+    } catch {
+      isPasswordMatch = owner.password === password;
+      if (isPasswordMatch) {
+        owner.password = await bcrypt.hash(password, 10);
+        await owner.save();
+      }
+    }
+
     if (!isPasswordMatch) {
       return NextResponse.json({ error: "Invalid credentials" }, { status: 401 });
     }
@@ -85,7 +107,7 @@ export async function POST(req) {
         role: "restaurantOwner",
         hasRestaurant 
       },
-      process.env.JWT_SECRET,
+      jwtSecret,
       { expiresIn: "2h" }
     );
 
@@ -93,6 +115,8 @@ export async function POST(req) {
       message: "Login successful",
       token,
       user: {
+        _id: owner._id,
+        id: owner._id,
         userId: owner._id,
         email: owner.email,
         firstName: owner.firstName,

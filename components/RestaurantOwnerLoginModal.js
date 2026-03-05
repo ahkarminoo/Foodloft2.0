@@ -7,8 +7,6 @@ import { faGoogle } from "@fortawesome/free-brands-svg-icons";
 import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import Image from "next/image";
-import { auth } from "@/lib/firebase-config";
-import { signInWithPopup, GoogleAuthProvider } from "firebase/auth";
 
 export default function RestaurantOwnerLoginModal({ isOpen, onClose, onLoginSuccess, onOpenSignupModal }) {
   const [email, setEmail] = useState("");
@@ -60,72 +58,8 @@ export default function RestaurantOwnerLoginModal({ isOpen, onClose, onLoginSucc
     setLoading(true);
     setError("");
     try {
-      // Clear any existing customer session first
-      localStorage.removeItem("customerUser");
-      localStorage.removeItem("customerToken");
-      
-      // Set a flag to indicate restaurant owner flow is starting
-      localStorage.setItem("restaurantOwnerFlow", "true");
-      
-      const provider = new GoogleAuthProvider();
-      const result = await signInWithPopup(auth, provider);
-      
-      // First, try to create/find restaurant owner profile
-      const signupResponse = await fetch("/api/restaurant-owner/signup", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          email: result.user.email,
-          firebaseUid: result.user.uid,
-          firstName: result.user.displayName?.split(' ')[0] || '',
-          lastName: result.user.displayName?.split(' ').slice(1).join(' ') || 'User',
-          profileImage: result.user.photoURL || '',
-        }),
-      });
-
-      if (!signupResponse.ok) {
-        const errorData = await signupResponse.json();
-        console.error('Restaurant owner signup/sync failed:', {
-          status: signupResponse.status,
-          statusText: signupResponse.statusText,
-          errorData
-        });
-        throw new Error(errorData.message || `Failed to sync restaurant owner profile (${signupResponse.status})`);
-      }
-
-      const signupData = await signupResponse.json();
-      
-      // Now login with Firebase UID
-      const loginResponse = await fetch("/api/restaurant-owner/login", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ firebaseUid: result.user.uid }),
-      });
-
-      if (!loginResponse.ok) {
-        const errorData = await loginResponse.json();
-        throw new Error(errorData.error || "Login failed");
-      }
-
-      const loginData = await loginResponse.json();
-
-      // Clear customer data and set restaurant owner data
-      localStorage.removeItem("customerUser");
-      localStorage.removeItem("customerToken");
-      localStorage.removeItem("restaurantOwnerFlow");
-      localStorage.setItem("restaurantOwnerUser", JSON.stringify(loginData.user));
-      localStorage.setItem("restaurantOwnerToken", loginData.token);
-      
-      if (loginData.user.hasRestaurant) {
-        router.push('/restaurant-owner/setup/dashboard');
-      } else {
-        router.push('/restaurant-owner/setup');
-      }
-      
-      onClose();
+      setError("Google login is temporarily disabled. Use email/password login.");
     } catch (err) {
-      // Clean up flow flag on error
-      localStorage.removeItem("restaurantOwnerFlow");
       setError(err.message);
     } finally {
       setLoading(false);
@@ -158,6 +92,7 @@ export default function RestaurantOwnerLoginModal({ isOpen, onClose, onLoginSucc
               src="/images/body-images/alexander-fae-TivEEYzzhik-unsplash (1).jpg"
               alt="Restaurant ambiance"
               fill
+              sizes="(max-width: 768px) 100vw, 40vw"
               className="object-cover"
             />
             <div className="absolute inset-0 z-20 p-6 flex flex-col justify-end">

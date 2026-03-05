@@ -1,12 +1,9 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faEnvelope, faLock, faUtensils } from "@fortawesome/free-solid-svg-icons";
-import { faGoogle } from "@fortawesome/free-brands-svg-icons";
 import { motion, AnimatePresence } from "framer-motion";
-import { auth } from "@/lib/firebase-config";
-import { signInWithEmailAndPassword, signInWithPopup, signInWithRedirect, getRedirectResult, GoogleAuthProvider } from "firebase/auth";
 
 export default function LoginModal({ isOpen, onClose, openSignupModal, onLoginSuccess }) {
   const [email, setEmail] = useState("");
@@ -14,139 +11,36 @@ export default function LoginModal({ isOpen, onClose, openSignupModal, onLoginSu
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
-  // Handle redirect result from Google login
-  useEffect(() => {
-    const handleRedirectResult = async () => {
-      if (localStorage.getItem('googleLoginAttempt') === 'true') {
-        try {
-          const result = await getRedirectResult(auth);
-          if (result) {
-            // Extract Google user information
-            const { uid, email, displayName, photoURL } = result.user;
-            
-            console.log('Google login redirect - User info:', {
-              uid,
-              email,
-              displayName,
-              photoURL
-            });
-            
-            // Sync profile with complete Google information
-            const userProfile = await syncProfile(uid, email, displayName, photoURL);
-            
-            if (onLoginSuccess) onLoginSuccess(userProfile);
-            onClose();
-            
-            // Clean up
-            localStorage.removeItem('googleLoginAttempt');
-            localStorage.removeItem('currentUrl');
-          }
-        } catch (error) {
-          console.error('Redirect result error:', error);
-          setError(error.message);
-        } finally {
-          localStorage.removeItem('googleLoginAttempt');
-        }
-      }
-    };
-
-    handleRedirectResult();
-  }, [onLoginSuccess, onClose]);
-
-  // Sync or fetch MongoDB profile after Firebase login
-  const syncProfile = async (firebaseUid, email, displayName = null, photoURL = null) => {
-    const requestBody = { email, firebaseUid };
-    
-    // If Google login, extract name and profile image
-    if (displayName || photoURL) {
-      const [firstName, ...rest] = (displayName || "").split(" ");
-      requestBody.firstName = firstName || "";
-      requestBody.lastName = rest.join(" ") || "";
-      requestBody.profileImage = photoURL || "";
-    }
-    
-    const res = await fetch("/api/signup", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(requestBody),
-    });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.message || "Failed to sync profile");
-    return data.user;
-  };
-
   const handleLogin = async (e) => {
     e.preventDefault();
     setLoading(true);
     setError("");
     try {
-      // 1. Firebase Auth
-      const userCredential = await signInWithEmailAndPassword(auth, email, password);
-      // 2. Sync/fetch MongoDB profile
-      const userProfile = await syncProfile(userCredential.user.uid, userCredential.user.email);
-      if (onLoginSuccess) onLoginSuccess(userProfile);
+      const response = await fetch('/api/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password })
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.message || 'Login failed');
+      }
+
+      localStorage.setItem('customerUser', JSON.stringify(data.user));
+      if (data.token) {
+        localStorage.setItem('customerToken', data.token);
+      }
+      window.dispatchEvent(new CustomEvent('customerUserLogin', { detail: data.user }));
+
+      if (onLoginSuccess) {
+        onLoginSuccess(data.user);
+      }
+
       onClose();
     } catch (error) {
       setError(error.message);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleGoogleLogin = async () => {
-    setLoading(true);
-    setError("");
-    try {
-      const provider = new GoogleAuthProvider();
-      
-      // Add custom parameters to handle CORS issues
-      provider.setCustomParameters({
-        prompt: 'select_account'
-      });
-
-      let result;
-      try {
-        // Try popup first
-        result = await signInWithPopup(auth, provider);
-      } catch (popupError) {
-        console.log('Popup blocked, trying redirect method...');
-        // If popup is blocked, fall back to redirect
-        if (popupError.code === 'auth/popup-blocked' || 
-            popupError.code === 'auth/popup-closed-by-user' ||
-            popupError.message.includes('Cross-Origin-Opener-Policy')) {
-          
-          // Store current state before redirect
-          localStorage.setItem('googleLoginAttempt', 'true');
-          localStorage.setItem('currentUrl', window.location.href);
-          
-          await signInWithRedirect(auth, provider);
-          return; // Function will complete after redirect
-        }
-        throw popupError;
-      }
-      
-      // Extract Google user information
-      const { uid, email, displayName, photoURL } = result.user;
-      
-      console.log('Google login - User info:', {
-        uid,
-        email,
-        displayName,
-        photoURL
-      });
-      
-      // Sync profile with complete Google information
-      const userProfile = await syncProfile(uid, email, displayName, photoURL);
-      
-      if (onLoginSuccess) onLoginSuccess(userProfile);
-      onClose();
-    } catch (error) {
-      console.error('Google login error:', error);
-      if (error.message.includes('Cross-Origin-Opener-Policy')) {
-        setError('Popup blocked by browser. Please allow popups for this site or try refreshing the page.');
-      } else {
-        setError(error.message);
-      }
     } finally {
       setLoading(false);
     }
@@ -261,29 +155,6 @@ export default function LoginModal({ isOpen, onClose, openSignupModal, onLoginSu
               whileTap={{ scale: 0.98 }}
             >
               {loading ? "Logging in..." : "Login"}
-            </motion.button>
-
-            {/* Divider */}
-            <div className="relative">
-              <div className="absolute inset-0 flex items-center">
-                <div className="w-full border-t border-[#141517]/20"></div>
-              </div>
-              <div className="relative flex justify-center text-sm">
-                <span className="px-2 bg-white text-[#141517]/60">Or continue with</span>
-              </div>
-            </div>
-
-            {/* Google Login Button */}
-            <motion.button
-              type="button"
-              onClick={handleGoogleLogin}
-              disabled={loading}
-              className="w-full py-4 bg-white border border-[#141517]/20 text-[#141517] font-semibold rounded-xl hover:bg-[#F2F4F7] transition-all transform hover:scale-[1.02] disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100 flex items-center justify-center space-x-3"
-              whileHover={{ scale: 1.02 }}
-              whileTap={{ scale: 0.98 }}
-            >
-              <FontAwesomeIcon icon={faGoogle} className="text-red-500 text-lg" />
-              <span>{loading ? "Signing in..." : "Sign in with Google"}</span>
             </motion.button>
 
             <p className="text-center text-[#141517]/60 text-sm">

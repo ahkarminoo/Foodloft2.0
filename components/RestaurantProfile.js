@@ -4,6 +4,23 @@ import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { GoogleMap, LoadScript, Marker } from '@react-google-maps/api'
 
+function toLatLngLiteral(coordinates) {
+  if (!coordinates) return null;
+
+  if (Array.isArray(coordinates) && coordinates.length >= 2) {
+    const lng = Number(coordinates[0]);
+    const lat = Number(coordinates[1]);
+    if (Number.isFinite(lat) && Number.isFinite(lng)) return { lat, lng };
+    return null;
+  }
+
+  const lat = Number(coordinates.lat ?? coordinates.latitude);
+  const lng = Number(coordinates.lng ?? coordinates.lon ?? coordinates.longitude);
+  if (Number.isFinite(lat) && Number.isFinite(lng)) return { lat, lng };
+
+  return null;
+}
+
 export default function RestaurantProfile() {
   const router = useRouter()
   const [restaurants, setRestaurants] = useState([])
@@ -66,6 +83,8 @@ export default function RestaurantProfile() {
   if (!selectedRestaurant) {
     return <div className="text-xl">No restaurant profile found</div>;
   }
+
+  const restaurantCoordinates = toLatLngLiteral(selectedRestaurant?.location?.coordinates);
 
   return (
     <>
@@ -136,14 +155,14 @@ export default function RestaurantProfile() {
             <p className="text-xl font-medium text-gray-800">
               {selectedRestaurant?.location?.address || 'Location not set'}
             </p>
-              {selectedRestaurant?.location?.coordinates && (
+              {restaurantCoordinates && (
                 <div className="mt-4 h-[200px] rounded-lg overflow-hidden">
                   <GoogleMap
                     mapContainerStyle={{ width: '100%', height: '100%' }}
-                    center={location.coordinates}
+                    center={restaurantCoordinates}
                     zoom={15}
                   >
-                    <Marker position={location.coordinates} />
+                    <Marker position={restaurantCoordinates} />
                   </GoogleMap>
                 </div>
               )}

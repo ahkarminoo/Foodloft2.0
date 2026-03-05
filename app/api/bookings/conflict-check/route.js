@@ -3,6 +3,41 @@ import dbConnect from '@/lib/mongodb';
 import TableLock from '@/models/TableLock';
 import Booking from '@/models/Booking';
 
+function timeToMinutes(timeStr) {
+    if (!timeStr || typeof timeStr !== 'string') return NaN;
+
+    const trimmed = timeStr.trim();
+    const twelveHourMatch = trimmed.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
+    if (twelveHourMatch) {
+        let hours = Number(twelveHourMatch[1]);
+        const minutes = Number(twelveHourMatch[2]);
+        const period = twelveHourMatch[3].toUpperCase();
+
+        if (period === 'PM' && hours !== 12) hours += 12;
+        if (period === 'AM' && hours === 12) hours = 0;
+        return hours * 60 + minutes;
+    }
+
+    const twentyFourHourMatch = trimmed.match(/^(\d{1,2}):(\d{2})$/);
+    if (twentyFourHourMatch) {
+        const hours = Number(twentyFourHourMatch[1]);
+        const minutes = Number(twentyFourHourMatch[2]);
+        return hours * 60 + minutes;
+    }
+
+    return NaN;
+}
+
+function hasOverlap(startA, endA, startB, endB) {
+    const aStart = timeToMinutes(startA);
+    const aEnd = timeToMinutes(endA);
+    const bStart = timeToMinutes(startB);
+    const bEnd = timeToMinutes(endB);
+
+    if ([aStart, aEnd, bStart, bEnd].some(Number.isNaN)) return false;
+    return aStart < bEnd && aEnd > bStart;
+}
+
 export async function POST(request) {
     try {
         await dbConnect();
@@ -26,59 +61,38 @@ export async function POST(request) {
 
         const checkDate = new Date(date);
         checkDate.setHours(0, 0, 0, 0);
+        const nextDate = new Date(checkDate);
+        nextDate.setDate(nextDate.getDate() + 1);
 
-        // Check for existing bookings
-        const existingBookings = await Booking.find({
+        const dayBookings = await Booking.find({
             restaurantId,
             tableId,
-            date: checkDate,
-            startTime,
-            endTime,
-            status: { $in: ['pending', 'confirmed'] }
-        }).select('_id status customerName customerEmail startTime endTime version');
-
-        // Check for active locks
-        const activeLocks = await TableLock.find({
-            restaurantId,
-            tableId,
-            date: checkDate,
-            startTime,
-            endTime,
-            status: 'active',
-            expiresAt: { $gt: new Date() },
-            ...(excludeLockId && { lockId: { $ne: excludeLockId } })
-        }).select('_id lockId status expiresAt userId lockedAt');
-
-        // Check for overlapping time slots
-        const overlappingBookings = await Booking.find({
-            restaurantId,
-            tableId,
-            date: checkDate,
+            date: { $gte: checkDate, $lt: nextDate },
             status: { $in: ['pending', 'confirmed'] },
-            $or: [
-                // Booking starts during requested time
-                {
-                    startTime: { $lt: endTime },
-                    endTime: { $gt: startTime }
-                }
-            ]
         }).select('_id status customerName startTime endTime version');
 
-        const overlappingLocks = await TableLock.find({
+        const dayLocks = await TableLock.find({
             restaurantId,
             tableId,
-            date: checkDate,
+            date: { $gte: checkDate, $lt: nextDate },
             status: 'active',
             expiresAt: { $gt: new Date() },
             ...(excludeLockId && { lockId: { $ne: excludeLockId } }),
-            $or: [
-                // Lock starts during requested time
-                {
-                    startTime: { $lt: endTime },
-                    endTime: { $gt: startTime }
-                }
-            ]
         }).select('_id lockId status expiresAt userId lockedAt startTime endTime');
+
+        const existingBookings = dayBookings.filter((booking) =>
+            booking.startTime === startTime && booking.endTime === endTime
+        );
+        const activeLocks = dayLocks.filter((lock) =>
+            lock.startTime === startTime && lock.endTime === endTime
+        );
+
+        const overlappingBookings = dayBookings.filter((booking) =>
+            hasOverlap(booking.startTime, booking.endTime, startTime, endTime)
+        );
+        const overlappingLocks = dayLocks.filter((lock) =>
+            hasOverlap(lock.startTime, lock.endTime, startTime, endTime)
+        );
 
         // Analyze conflicts
         const conflicts = {
@@ -108,9 +122,11 @@ export async function POST(request) {
         }
 
         // Add time-based availability info
-        const now = new Date();
         const requestDate = new Date(date);
-        const isPastDate = requestDate < now.setHours(0, 0, 0, 0);
+        requestDate.setHours(0, 0, 0, 0);
+        const todayStart = new Date();
+        todayStart.setHours(0, 0, 0, 0);
+        const isPastDate = requestDate < todayStart;
         
         if (isPastDate) {
             availabilityScore = 0;
@@ -165,27 +181,32 @@ export async function GET(request) {
 
         const checkDate = new Date(date);
         checkDate.setHours(0, 0, 0, 0);
+        const nextDate = new Date(checkDate);
+        nextDate.setDate(nextDate.getDate() + 1);
 
-        // Quick check for exact matches only
-        const [bookingCount, lockCount] = await Promise.all([
-            Booking.countDocuments({
+        const [bookings, locks] = await Promise.all([
+            Booking.find({
                 restaurantId,
                 tableId,
-                date: checkDate,
-                startTime,
-                endTime,
+                date: { $gte: checkDate, $lt: nextDate },
                 status: { $in: ['pending', 'confirmed'] }
-            }),
-            TableLock.countDocuments({
+            }).select('startTime endTime'),
+            TableLock.find({
                 restaurantId,
                 tableId,
-                date: checkDate,
-                startTime,
-                endTime,
+                date: { $gte: checkDate, $lt: nextDate },
                 status: 'active',
                 expiresAt: { $gt: new Date() }
-            })
+            }).select('startTime endTime')
         ]);
+
+        const bookingCount = bookings.filter((booking) =>
+            hasOverlap(booking.startTime, booking.endTime, startTime, endTime)
+        ).length;
+
+        const lockCount = locks.filter((lock) =>
+            hasOverlap(lock.startTime, lock.endTime, startTime, endTime)
+        ).length;
 
         const isAvailable = bookingCount === 0 && lockCount === 0;
 

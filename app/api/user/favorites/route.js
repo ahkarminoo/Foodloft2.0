@@ -2,47 +2,38 @@ import { NextResponse } from "next/server";
 import dbConnect from "@/lib/mongodb";
 import Favorite from "@/models/favorites";
 import User from "@/models/user";
-import { verifyFirebaseAuth } from "@/lib/firebase-admin";
+import jwt from "jsonwebtoken";
 
-// Helper function to ensure user exists in MongoDB
-async function ensureUserExists(firebaseUid, email) {
-  try {
-    // First try to find by firebaseUid
-    let user = await User.findOne({ firebaseUid });
-    
-    if (!user) {
-      console.log("User not found by firebaseUid, attempting to create...");
-      try {
-        // Create new user
-        user = await User.create({
-          firebaseUid,
-          email,
-          role: 'customer'
-        });
-        console.log("New user created:", user._id);
-      } catch (createError) {
-        // If duplicate email error, try to find by email as fallback
-        if (createError.code === 11000) {
-          console.log("Duplicate key error, finding existing user by email...");
-          user = await User.findOne({ email });
-          if (user) {
-            // Update existing user with firebaseUid if missing
-            if (!user.firebaseUid) {
-              user.firebaseUid = firebaseUid;
-              await user.save();
-            }
-          }
-        }
-        if (!user) {
-          throw createError;
-        }
-      }
+async function getAuthenticatedUser(req) {
+  const token = req.headers.get("authorization")?.split(" ")[1];
+  if (!token) {
+    return { success: false, message: "No token provided" };
+  }
+
+  if (token.startsWith('line.')) {
+    const lineUserId = token.replace('line.', '');
+    const lineUser = await User.findOne({ lineUserId });
+    if (!lineUser) {
+      return { success: false, message: "LINE user not found" };
     }
-    
-    return user;
-  } catch (error) {
-    console.error("Error in ensureUserExists:", error);
-    throw error;
+    return { success: true, user: lineUser };
+  }
+
+  try {
+    const secret = process.env.JWT_SECRET || process.env.NEXTAUTH_SECRET;
+    if (!secret) {
+      return { success: false, message: "JWT secret is not configured" };
+    }
+
+    const decoded = jwt.verify(token, secret);
+    const user = await User.findById(decoded.userId);
+    if (!user) {
+      return { success: false, message: "User not found" };
+    }
+
+    return { success: true, user };
+  } catch {
+    return { success: false, message: "Invalid token" };
   }
 }
 
@@ -51,16 +42,11 @@ export async function GET(req) {
   await dbConnect();
 
   try {
-    // Verify Firebase authentication
-    const authResult = await verifyFirebaseAuth(req);
+    const authResult = await getAuthenticatedUser(req);
     if (!authResult.success) {
-      return NextResponse.json({ message: authResult.error }, { status: 401 });
+      return NextResponse.json({ message: authResult.message }, { status: 401 });
     }
-
-    const { firebaseUid, email } = authResult;
-
-    // Ensure user exists in MongoDB
-    const user = await ensureUserExists(firebaseUid, email);
+    const user = authResult.user;
 
     const favorites = await Favorite.find({ userId: user._id }).populate('restaurantId');
 
@@ -88,17 +74,13 @@ export async function PUT(req) {
   try {
     await dbConnect();
     
-    // Verify Firebase authentication
-    const authResult = await verifyFirebaseAuth(req);
+    const authResult = await getAuthenticatedUser(req);
     if (!authResult.success) {
-      return NextResponse.json({ message: authResult.error }, { status: 401 });
+      return NextResponse.json({ message: authResult.message }, { status: 401 });
     }
 
-    const { firebaseUid, email } = authResult;
     const { restaurantId } = await req.json();
-
-    // Ensure user exists in MongoDB
-    const user = await ensureUserExists(firebaseUid, email);
+    const user = authResult.user;
 
     // Check if the favorite already exists
     const existingFavorite = await Favorite.findOne({ userId: user._id, restaurantId });

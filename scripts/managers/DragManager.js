@@ -14,15 +14,13 @@ export class DragManager {
         this.scaleStartPosition = new THREE.Vector2();
         this.originalScale = new THREE.Vector3();
         this.currentScaledObject = null;
+        this.controlsLocked = false;
 
         // Bind methods
         this.handleMouseMove = this.handleMouseMove.bind(this);
         this.handleMouseDown = this.handleMouseDown.bind(this);
         this.stopDragging = this.stopDragging.bind(this);
         this.handleScaleStart = this.handleScaleStart.bind(this);
-        
-        // Start controls monitoring for mouse interactions
-        this.startControlsWatchdog();
         
         // Add emergency reset handlers
         this.initializeEmergencyResets();
@@ -32,28 +30,10 @@ export class DragManager {
         if (this.ui.wallManager.isAddWallMode) {
             this.updateWallPreview(event);
         } else if (this.isDragging) {
-            // CRITICAL: Stop event from reaching OrbitControls
-            event.stopImmediatePropagation();
             event.preventDefault();
-            
-            console.log('🖱️ DragManager: Processing drag movement, controls enabled:', this.ui.controls.enabled);
-            
-            // Ensure controls stay disabled during dragging
-            if (this.ui.controls.enabled) {
-                this.ui.controls.enabled = false;
-            }
             this.handleDrag(event);
         } else if (this.isRotating) {
-            // CRITICAL: Stop event from reaching OrbitControls
-            event.stopImmediatePropagation();
             event.preventDefault();
-            
-            console.log('🔄 DragManager: Processing rotation movement, controls enabled:', this.ui.controls.enabled);
-            
-            // Ensure controls stay disabled during rotation
-            if (this.ui.controls.enabled) {
-                this.ui.controls.enabled = false;
-            }
             this.handleRotation(event);
         }
     }
@@ -179,17 +159,13 @@ export class DragManager {
         if (intersects.length > 0) {
             const object = this.findMovableParent(intersects[0].object);
             if (object && object.userData.isMovable) {
-                console.log('🎯 DragManager: Object selected for interaction:', object.userData.name || 'object');
-                
-                // CRITICAL: Prevent OrbitControls from processing this event
+                // Prevent OrbitControls from processing this event
                 event.stopImmediatePropagation();
                 event.preventDefault();
                 
                 if (isRotation && object.userData.isRotatable) {
-                    console.log('🔄 DragManager: Starting rotation mode');
                     this.startRotation(object, event);
                 } else if (!isRotation) {
-                    console.log('🖱️ DragManager: Starting drag mode');
                     this.startDragging(object, intersects[0].point);
                 }
             }
@@ -199,14 +175,7 @@ export class DragManager {
     startDragging(object, intersectPoint) {
         this.isDragging = true;
         this.selectedObject = object;
-        
-        // Aggressively disable OrbitControls
-        this.ui.controls.enabled = false;
-        this.ui.controls.enableRotate = false;
-        this.ui.controls.enablePan = false;
-        this.ui.controls.enableZoom = false;
-        
-        console.log('🖱️ DragManager: Drag started, all controls disabled');
+        this.lockControls();
         
         object.position.y = 0.1;
         this.offset.copy(object.position).sub(intersectPoint);
@@ -229,14 +198,7 @@ export class DragManager {
     startRotation(object, event) {
         this.isRotating = true;
         this.selectedObject = object;
-        
-        // Aggressively disable OrbitControls
-        this.ui.controls.enabled = false;
-        this.ui.controls.enableRotate = false;
-        this.ui.controls.enablePan = false;
-        this.ui.controls.enableZoom = false;
-        
-        console.log('🔄 DragManager: Rotation started, all controls disabled');
+        this.lockControls();
         
         this.previousMousePosition.set(event.clientX, event.clientY);
     }
@@ -253,16 +215,7 @@ export class DragManager {
         this.isDragging = false;
         this.isRotating = false; // Also stop rotation
         this.selectedObject = null;
-        
-        // Always re-enable controls when stopping all interactions
-        if (this.ui && this.ui.controls) {
-            this.ui.controls.enabled = true;
-            this.ui.controls.enableRotate = true;
-            this.ui.controls.enablePan = true;
-            this.ui.controls.enableZoom = true;
-            
-            console.log('🔓 DragManager: All controls re-enabled');
-        }
+        this.unlockControls();
         
         this.ui.wallManager.clearWallPreview();
     }
@@ -274,16 +227,25 @@ export class DragManager {
         this.selectedObject = null;
         this.scaleMode = false;
         this.currentScaledObject = null;
-        
-        // Force enable controls
-        if (this.ui && this.ui.controls) {
-            this.ui.controls.enabled = true;
-            this.ui.controls.enableRotate = true;
-            this.ui.controls.enablePan = true;
-            this.ui.controls.enableZoom = true;
-            
-            console.log('🔓 DragManager: Emergency reset - all controls re-enabled');
-        }
+        this.unlockControls();
+    }
+
+    lockControls() {
+        if (!this.ui || !this.ui.controls || this.controlsLocked) return;
+        this.controlsLocked = true;
+        this.ui.controls.enabled = false;
+        this.ui.controls.enableRotate = false;
+        this.ui.controls.enablePan = false;
+        this.ui.controls.enableZoom = false;
+    }
+
+    unlockControls() {
+        if (!this.ui || !this.ui.controls) return;
+        this.controlsLocked = false;
+        this.ui.controls.enabled = true;
+        this.ui.controls.enableRotate = true;
+        this.ui.controls.enablePan = true;
+        this.ui.controls.enableZoom = true;
     }
 
     handleScaleStart(event) {
@@ -400,44 +362,6 @@ export class DragManager {
         this.ui.renderer.domElement.style.cursor = enable ? 'ew-resize' : 'default';
     }
 
-    startControlsWatchdog() {
-        // Monitor controls state for mouse interactions
-        this.controlsWatchdog = setInterval(() => {
-            if (this.ui && this.ui.controls) {
-                // Force disable controls during active mouse interactions
-                if (this.isDragging || this.isRotating) {
-                    const needsDisabling = this.ui.controls.enabled || 
-                                          this.ui.controls.enableRotate || 
-                                          this.ui.controls.enablePan || 
-                                          this.ui.controls.enableZoom;
-                    
-                    if (needsDisabling) {
-                        console.log('🔒 DragManager: Aggressively disabling ALL OrbitControls features');
-                        this.ui.controls.enabled = false;
-                        this.ui.controls.enableRotate = false;
-                        this.ui.controls.enablePan = false;
-                        this.ui.controls.enableZoom = false;
-                    }
-                } 
-                // Re-enable controls when no interactions are happening
-                else if (!this.isDragging && !this.isRotating) {
-                    const needsEnabling = !this.ui.controls.enabled || 
-                                         !this.ui.controls.enableRotate || 
-                                         !this.ui.controls.enablePan || 
-                                         !this.ui.controls.enableZoom;
-                    
-                    if (needsEnabling) {
-                        console.log('🔓 DragManager: Re-enabling ALL OrbitControls features');
-                        this.ui.controls.enabled = true;
-                        this.ui.controls.enableRotate = true;
-                        this.ui.controls.enablePan = true;
-                        this.ui.controls.enableZoom = true;
-                    }
-                }
-            }
-        }, 25); // Check very frequently for immediate response
-    }
-
     initializeEmergencyResets() {
         // Handle edge cases that could leave controls disabled
         const canvas = this.ui.renderer.domElement;
@@ -463,12 +387,6 @@ export class DragManager {
     }
 
     destroy() {
-        // Cleanup watchdog
-        if (this.controlsWatchdog) {
-            clearInterval(this.controlsWatchdog);
-            this.controlsWatchdog = null;
-        }
-        
         // Final state reset
         this.resetAllStates();
     }

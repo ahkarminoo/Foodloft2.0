@@ -9,9 +9,10 @@ export async function POST(req) {
 
     const { firstName, lastName, email, password, contactNumber} =
       await req.json();
+    const normalizedEmail = String(email || "").trim().toLowerCase();
 
     // Validate input
-    if (!firstName || !lastName || !email || !password || !contactNumber ) {
+    if (!firstName || !lastName || !normalizedEmail || !password || !contactNumber ) {
       return NextResponse.json(
         { message: "All fields are required" },
         { status: 400 }
@@ -19,7 +20,7 @@ export async function POST(req) {
     }
 
     // Check for duplicate email
-    const existingOwner = await RestaurantOwner.findOne({ email });
+    const existingOwner = await RestaurantOwner.findOne({ email: normalizedEmail });
     if (existingOwner) {
       return NextResponse.json(
         { message: "Email already exists" },
@@ -34,7 +35,7 @@ export async function POST(req) {
     const newOwner = new RestaurantOwner({
       firstName,
       lastName,
-      email,
+      email: normalizedEmail,
       password: hashedPassword,
       contactNumber,
       subscriptionPlan: "Basic"

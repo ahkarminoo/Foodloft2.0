@@ -1,7 +1,6 @@
 
 import { Client, validateSignature } from "@line/bot-sdk";
 import { NextResponse } from "next/server";
-import { MongoClient } from "mongodb";
 import dbConnect from "@/lib/mongodb";
 import Restaurant from "@/models/Restaurants";
 import Floorplan from "@/models/Floorplan";
@@ -14,20 +13,16 @@ import { notifyStaffOfNewBooking, notifyCustomerOfBookingConfirmation, notifyCus
 // RESTAURANT CONFIGURATION
 // ========================================
 // Change this restaurant ID to switch between different restaurants
-const DEFAULT_RESTAURANT_ID = "68d548d7a11657653c2d49ec";
+const DEFAULT_RESTAURANT_ID = process.env.DEFAULT_RESTAURANT_ID || "68d548d7a11657653c2d49ec";
+const LINE_LIFF_ID = process.env.LINE_LIFF_ID || process.env.NEXT_PUBLIC_LINE_LIFF_ID || "2007787204-zGYZn1ZE";
 
 const config = {
   channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN,
   channelSecret: process.env.LINE_CHANNEL_SECRET,
 };
 
-const MONGODB_URI = process.env.MONGODB_URI;
-const MONGODB_DB = "stock";
-const MONGODB_COLLECTION = "bookings";
-
-const client = new Client(config);
-
-let mongoClient;
+const hasLineConfig = !!(config.channelAccessToken && config.channelSecret);
+const client = hasLineConfig ? new Client(config) : null;
 
 // Event deduplication cache to prevent processing same events multiple times
 const processedEvents = new Map();
@@ -404,7 +399,7 @@ async function handleCustomerMode(event, userId, client) {
                   action: {
                     type: "uri",
                     // Same LIFF ID for both local and production - LIFF app should be configured to point to ngrok URL for testing
-                    uri: `https://liff.line.me/2007787204-zGYZn1ZE?restaurantId=${restaurantId}`,
+                    uri: `https://liff.line.me/${LINE_LIFF_ID}?restaurantId=${restaurantId}`,
                     label: "Open Restaurant App"
                   },
                   margin: "sm"
@@ -520,7 +515,7 @@ async function handleCustomerMode(event, userId, client) {
                 color: "#0084FF",
                 action: {
                   type: "uri",
-                  uri: `https://liff.line.me/2007787204-zGYZn1ZE?restaurantId=${restaurantId}`,
+                  uri: `https://liff.line.me/${LINE_LIFF_ID}?restaurantId=${restaurantId}`,
                   label: "Open Restaurant App"
                 },
                 margin: "sm"
@@ -642,19 +637,24 @@ async function handleCustomerPostback(event, userId, client, postbackData) {
           return await handleBookingDateSelection(event, userId, client, customer, page);
         }
         
+        if (postbackData.startsWith("action=booking_duration&date=")) {
+          const params = parseBookingParams(postbackData);
+          return await handleBookingDurationSelection(event, userId, client, customer, params.date, params.time);
+        }
+
         if (postbackData.startsWith("action=booking_guests&date=")) {
           const params = parseBookingParams(postbackData);
-          return await handleBookingGuestSelection(event, userId, client, customer, params.date, params.time);
+          return await handleBookingGuestSelection(event, userId, client, customer, params.date, params.time, params.duration || DEFAULT_BOOKING_DURATION_MINUTES);
         }
         
         if (postbackData.startsWith("action=booking_tables&date=")) {
           const params = parseBookingParams(postbackData);
-          return await handleBookingTableSelection(event, userId, client, customer, params.date, params.time, params.guests);
+          return await handleBookingTableSelection(event, userId, client, customer, params.date, params.time, params.guests, 0, params.duration || DEFAULT_BOOKING_DURATION_MINUTES);
         }
         
         if (postbackData.startsWith("action=booking_table_page&date=")) {
           const params = parseBookingParams(postbackData);
-          return await handleBookingTableSelection(event, userId, client, customer, params.date, params.time, params.guests, params.page || 0);
+          return await handleBookingTableSelection(event, userId, client, customer, params.date, params.time, params.guests, params.page || 0, params.duration || DEFAULT_BOOKING_DURATION_MINUTES);
         }
         
         // Skip payment processing - go directly to booking completion for staff confirmation workflow
@@ -663,19 +663,19 @@ async function handleCustomerPostback(event, userId, client, postbackData) {
           console.log("Postback data:", postbackData);
           const params = parseBookingParams(postbackData);
           console.log("Parsed params:", params);
-          return await handleBookingCompletion(event, userId, client, customer, params.date, params.time, params.guests, params.table);
+          return await handleBookingCompletion(event, userId, client, customer, params.date, params.time, params.guests, params.table, null, params.duration || DEFAULT_BOOKING_DURATION_MINUTES);
         }
         
         // Payment processing disabled - using staff confirmation workflow instead
         if (postbackData.startsWith("action=booking_payment_process&date=")) {
           console.log("Payment process disabled - redirecting to booking completion");
           const params = parseBookingParams(postbackData);
-          return await handleBookingCompletion(event, userId, client, customer, params.date, params.time, params.guests, params.table);
+          return await handleBookingCompletion(event, userId, client, customer, params.date, params.time, params.guests, params.table, null, params.duration || DEFAULT_BOOKING_DURATION_MINUTES);
         }
         
         if (postbackData.startsWith("action=booking_complete&date=")) {
           const params = parseBookingParams(postbackData);
-          return await handleBookingCompletion(event, userId, client, customer, params.date, params.time, params.guests, params.table);
+          return await handleBookingCompletion(event, userId, client, customer, params.date, params.time, params.guests, params.table, null, params.duration || DEFAULT_BOOKING_DURATION_MINUTES);
         }
         
         // Handle booking cancellation
@@ -1035,7 +1035,7 @@ async function handleCustomerInfo(event, userId, client, customer) {
     }
 
     // Create LIFF URL with restaurant ID parameter
-    const liffUrl = `https://liff.line.me/2007787204-zGYZn1ZE?restaurantId=${restaurantId}`;
+    const liffUrl = `https://liff.line.me/${LINE_LIFF_ID}?restaurantId=${restaurantId}`;
 
     // Send as text message with quick reply buttons
     return client.replyMessage(event.replyToken, {
@@ -1426,12 +1426,12 @@ async function handleBookingTimeSelection(event, userId, client, customer, selec
             }
           ]
         },
-        action: {
-          type: "postback",
-          data: `action=booking_guests&date=${selectedDate}&time=${time}`,
-          displayText: `Select ${timeDisplay}`
-        }
-      };
+      action: {
+        type: "postback",
+        data: `action=booking_duration&date=${selectedDate}&time=${time}`,
+        displayText: `Select ${timeDisplay}`
+      }
+    };
     });
 
     const message = {
@@ -1476,8 +1476,65 @@ async function handleBookingTimeSelection(event, userId, client, customer, selec
   }
 }
 
-async function handleBookingGuestSelection(event, userId, client, customer, selectedDate, selectedTime) {
+async function handleBookingDurationSelection(event, userId, client, customer, selectedDate, selectedTime) {
   try {
+    const durations = [60, 90, 120].map((minutes) => ({
+      minutes,
+      label: formatDurationLabel(minutes)
+    }));
+
+    const durationBubbles = durations.map((duration) => ({
+      type: "bubble",
+      body: {
+        type: "box",
+        layout: "vertical",
+        contents: [
+          {
+            type: "text",
+            text: "Duration",
+            size: "sm",
+            color: "#666666",
+            align: "center"
+          },
+          {
+            type: "text",
+            text: duration.label,
+            weight: "bold",
+            size: "xl",
+            color: "#1DB446",
+            align: "center",
+            margin: "md"
+          }
+        ]
+      },
+      action: {
+        type: "postback",
+        data: `action=booking_guests&date=${selectedDate}&time=${selectedTime}&duration=${duration.minutes}`,
+        displayText: `Select duration ${duration.label}`
+      }
+    }));
+
+    return client.replyMessage(event.replyToken, {
+      type: "flex",
+      altText: "Select Booking Duration",
+      contents: {
+        type: "carousel",
+        contents: durationBubbles
+      }
+    });
+  } catch (error) {
+    console.error('Error in duration selection:', error);
+    return client.replyMessage(event.replyToken, {
+      type: "text",
+      text: "Sorry, there was an error selecting duration. Please try again later.",
+    });
+  }
+}
+
+async function handleBookingGuestSelection(event, userId, client, customer, selectedDate, selectedTime, durationMinutes = DEFAULT_BOOKING_DURATION_MINUTES) {
+  try {
+    const safeDuration = normalizeDurationMinutes(durationMinutes);
+
     // Create guest count selection buttons (limit to 4 - LINE limit)
     const guestButtons = [
       { count: 1, label: "1 Guest" },
@@ -1487,7 +1544,7 @@ async function handleBookingGuestSelection(event, userId, client, customer, sele
     ].map(guest => ({
       type: "postback",
       label: guest.label,
-      data: `action=booking_tables&date=${selectedDate}&time=${selectedTime}&guests=${guest.count}`,
+      data: `action=booking_tables&date=${selectedDate}&time=${selectedTime}&duration=${safeDuration}&guests=${guest.count}`,
       displayText: `Select ${guest.label}`,
     }));
 
@@ -1529,7 +1586,7 @@ async function handleBookingGuestSelection(event, userId, client, customer, sele
       },
       action: {
         type: "postback",
-        data: `action=booking_tables&date=${selectedDate}&time=${selectedTime}&guests=${guest.count}`,
+        data: `action=booking_tables&date=${selectedDate}&time=${selectedTime}&duration=${safeDuration}&guests=${guest.count}`,
         displayText: `Select ${guest.label}`
       }
     }));
@@ -1552,22 +1609,25 @@ async function handleBookingGuestSelection(event, userId, client, customer, sele
   }
 }
 
-async function handleBookingTableSelection(event, userId, client, customer, selectedDate, selectedTime, guestCount, page = 0) {
+async function handleBookingTableSelection(event, userId, client, customer, selectedDate, selectedTime, guestCount, page = 0, durationMinutes = DEFAULT_BOOKING_DURATION_MINUTES) {
   try {
     await dbConnect();
+    const safeDuration = normalizeDurationMinutes(durationMinutes);
+    const endTimeStr = calculateEndTime(selectedTime, safeDuration);
     
     // Get restaurant ID once and reuse
     const restaurantId = await getRestaurantId();
     
     // Get all required data in parallel to reduce API calls
     const [availableTables, floorplanData] = await Promise.all([
-      getAvailableTablesOptimized(selectedDate, selectedTime, guestCount, restaurantId),
+      getAvailableTablesOptimized(selectedDate, selectedTime, guestCount, restaurantId, safeDuration),
       getFloorplanImageOptimized(restaurantId)
     ]);
     
     if (availableTables.length === 0) {
       const noTablesText = `❌ No Available Tables\n\n` +
-        `📅 ${new Date(selectedDate).toLocaleDateString("en-GB", { weekday: 'short', month: 'short', day: 'numeric' })} at ${selectedTime}\n` +
+        `📅 ${new Date(selectedDate).toLocaleDateString("en-GB", { weekday: 'short', month: 'short', day: 'numeric' })} at ${selectedTime}-${endTimeStr}\n` +
+        `⏱️ ${formatDurationLabel(safeDuration)}\n` +
         `👥 ${guestCount} guests\n\n` +
         `Sorry, no tables are available for your selected time.\n\n` +
         `💡 Quick Actions:\n` +
@@ -1645,7 +1705,7 @@ async function handleBookingTableSelection(event, userId, client, customer, sele
       },
       action: {
         type: "postback",
-        data: `action=booking_confirm&date=${selectedDate}&time=${selectedTime}&guests=${guestCount}&table=${table.id}`,
+        data: `action=booking_confirm&date=${selectedDate}&time=${selectedTime}&duration=${safeDuration}&guests=${guestCount}&table=${table.id}`,
         displayText: `Select Table ${table.id}`
       }
     }));
@@ -1671,7 +1731,7 @@ async function handleBookingTableSelection(event, userId, client, customer, sele
     } else {
       messages.push({
         type: "text",
-        text: `📋 Available Tables for ${dateStr} at ${selectedTime}\n👥 ${guestCount} guests\n\nSelect your preferred table:`,
+        text: `📋 Available Tables for ${dateStr} at ${selectedTime}-${endTimeStr}\n⏱️ ${formatDurationLabel(safeDuration)}\n👥 ${guestCount} guests\n\nSelect your preferred table:`,
       });
     }
     
@@ -1697,9 +1757,10 @@ async function handleBookingTableSelection(event, userId, client, customer, sele
   }
 }
 
-async function handleBookingPayment(event, userId, client, customer, selectedDate, selectedTime, guestCount, tableId) {
+async function handleBookingPayment(event, userId, client, customer, selectedDate, selectedTime, guestCount, tableId, durationMinutes = DEFAULT_BOOKING_DURATION_MINUTES) {
   try {
     await dbConnect();
+    const safeDuration = normalizeDurationMinutes(durationMinutes);
     
     // Get restaurant ID once and get all required data in parallel
     const restaurantId = await getRestaurantId();
@@ -1779,11 +1840,7 @@ async function handleBookingPayment(event, userId, client, customer, selectedDat
       day: 'numeric' 
     });
 
-    // Calculate end time (assuming 2-hour booking duration)
-    const [startHour, startMinute] = selectedTime.split(':').map(Number);
-    const endTime = new Date();
-    endTime.setHours(startHour + 2, startMinute);
-    const endTimeStr = endTime.toTimeString().slice(0, 5);
+    const endTimeStr = calculateEndTime(selectedTime, safeDuration);
 
     // Create flex message for payment
     const paymentMessage = {
@@ -1955,7 +2012,7 @@ async function handleBookingPayment(event, userId, client, customer, selectedDat
               color: "#1DB446",
               action: {
                 type: "postback",
-                data: `action=booking_payment_process&date=${selectedDate}&time=${selectedTime}&guests=${guestCount}&table=${tableId}&amount=${pricingData.finalPrice}`,
+                data: `action=booking_payment_process&date=${selectedDate}&time=${selectedTime}&duration=${safeDuration}&guests=${guestCount}&table=${tableId}&amount=${pricingData.finalPrice}`,
                 displayText: "Pay and Confirm Booking",
                 label: "💳 Pay & Confirm"
               }
@@ -1989,9 +2046,10 @@ async function handleBookingPayment(event, userId, client, customer, selectedDat
   }
 }
 
-async function handleBookingPaymentProcess(event, userId, client, customer, selectedDate, selectedTime, guestCount, tableId, amount) {
+async function handleBookingPaymentProcess(event, userId, client, customer, selectedDate, selectedTime, guestCount, tableId, amount, durationMinutes = DEFAULT_BOOKING_DURATION_MINUTES) {
   try {
     await dbConnect();
+    const safeDuration = normalizeDurationMinutes(durationMinutes);
     
     console.log(`Processing payment of ${amount} THB for booking...`);
     console.log(`Amount type: ${typeof amount}, Amount value: ${amount}`);
@@ -2029,7 +2087,7 @@ async function handleBookingPaymentProcess(event, userId, client, customer, sele
           holidayFactor: { value: 1, reason: 'No holiday' }
         }
       };
-      return await handleBookingCompletion(event, userId, client, customer, selectedDate, selectedTime, guestCount, tableId, pricingData);
+      return await handleBookingCompletion(event, userId, client, customer, selectedDate, selectedTime, guestCount, tableId, pricingData, safeDuration);
     } else {
       console.log("Payment failed");
       // Payment failed
@@ -2043,7 +2101,7 @@ async function handleBookingPaymentProcess(event, userId, client, customer, sele
             {
               type: "postback",
               label: "Try Again",
-              data: `action=booking_confirm&date=${selectedDate}&time=${selectedTime}&guests=${guestCount}&table=${tableId}`,
+              data: `action=booking_confirm&date=${selectedDate}&time=${selectedTime}&duration=${safeDuration}&guests=${guestCount}&table=${tableId}`,
               displayText: "Try payment again",
             },
             {
@@ -2067,9 +2125,10 @@ async function handleBookingPaymentProcess(event, userId, client, customer, sele
   }
 }
 
-async function handleBookingConfirmation(event, userId, client, customer, selectedDate, selectedTime, guestCount, tableId) {
+async function handleBookingConfirmation(event, userId, client, customer, selectedDate, selectedTime, guestCount, tableId, durationMinutes = DEFAULT_BOOKING_DURATION_MINUTES) {
   try {
     await dbConnect();
+    const safeDuration = normalizeDurationMinutes(durationMinutes);
     
     // Get restaurant ID once and get all required data in parallel
     const restaurantId = await getRestaurantId();
@@ -2098,11 +2157,7 @@ async function handleBookingConfirmation(event, userId, client, customer, select
       day: 'numeric' 
     });
 
-    // Calculate end time (assuming 2-hour booking duration)
-    const [startHour, startMinute] = selectedTime.split(':').map(Number);
-    const endTime = new Date();
-    endTime.setHours(startHour + 2, startMinute);
-    const endTimeStr = endTime.toTimeString().slice(0, 5);
+    const endTimeStr = calculateEndTime(selectedTime, safeDuration);
 
     // Create flex message for booking confirmation
     const confirmationMessage = {
@@ -2246,7 +2301,7 @@ async function handleBookingConfirmation(event, userId, client, customer, select
               color: "#1DB446",
               action: {
                 type: "postback",
-                data: `action=booking_complete&date=${selectedDate}&time=${selectedTime}&guests=${guestCount}&table=${tableId}`,
+                data: `action=booking_complete&date=${selectedDate}&time=${selectedTime}&duration=${safeDuration}&guests=${guestCount}&table=${tableId}`,
                 displayText: "Confirm and book",
                 label: "Confirm Booking"
               }
@@ -2280,14 +2335,16 @@ async function handleBookingConfirmation(event, userId, client, customer, select
   }
 }
 
-async function handleBookingCompletion(event, userId, client, customer, selectedDate, selectedTime, guestCount, tableId, pricingData = null) {
+async function handleBookingCompletion(event, userId, client, customer, selectedDate, selectedTime, guestCount, tableId, pricingData = null, durationMinutes = DEFAULT_BOOKING_DURATION_MINUTES) {
   try {
+    const safeDuration = normalizeDurationMinutes(durationMinutes);
     console.log("🚀 handleBookingCompletion called with:", {
       selectedDate,
       selectedTime,
       guestCount,
       tableId,
-      pricingData
+      pricingData,
+      durationMinutes: safeDuration
     });
     await dbConnect();
     
@@ -2305,11 +2362,7 @@ async function handleBookingCompletion(event, userId, client, customer, selected
       });
     }
 
-    // Calculate end time (2-hour booking duration)
-    const [startHour, startMinute] = selectedTime.split(':').map(Number);
-    const endTime = new Date();
-    endTime.setHours(startHour + 2, startMinute);
-    const endTimeStr = endTime.toTimeString().slice(0, 5);
+    const endTimeStr = calculateEndTime(selectedTime, safeDuration);
 
     // Create booking using existing booking API logic
     const bookingData = {
@@ -2317,6 +2370,7 @@ async function handleBookingCompletion(event, userId, client, customer, selected
       date: selectedDate,
       startTime: selectedTime,
       endTime: endTimeStr,
+      durationMinutes: safeDuration,
       guestCount: parseInt(guestCount),
       restaurantId: restaurant._id,
       customerData: {
@@ -2350,6 +2404,7 @@ async function handleBookingCompletion(event, userId, client, customer, selected
         `🔖 Ref: ${booking.bookingRef}\n` +
         `📅 Date: ${dateStr}\n` +
         `⏰ Time: ${selectedTime} - ${endTimeStr}\n` +
+        `⏱️ Duration: ${formatDurationLabel(safeDuration)}\n` +
         `👥 Guests: ${guestCount}\n` +
         `🪑 Table: ${tableId}\n\n` +
         `⏳ PENDING CONFIRMATION\n\n` +
@@ -2382,6 +2437,41 @@ async function handleBookingCompletion(event, userId, client, customer, selected
   }
 }
 
+const DEFAULT_BOOKING_DURATION_MINUTES = 120;
+
+function normalizeDurationMinutes(durationMinutes) {
+  const parsed = parseInt(durationMinutes, 10);
+  if (Number.isNaN(parsed) || parsed < 30 || parsed > 360) {
+    return DEFAULT_BOOKING_DURATION_MINUTES;
+  }
+  return parsed;
+}
+
+function calculateEndTime(startTime, durationMinutes = DEFAULT_BOOKING_DURATION_MINUTES) {
+  const safeDuration = normalizeDurationMinutes(durationMinutes);
+  const [startHour, startMinute] = String(startTime).split(':').map(Number);
+
+  if (Number.isNaN(startHour) || Number.isNaN(startMinute)) {
+    return String(startTime);
+  }
+
+  const startTotalMinutes = (startHour * 60) + startMinute;
+  const endTotalMinutes = (startTotalMinutes + safeDuration) % (24 * 60);
+  const endHour = Math.floor(endTotalMinutes / 60);
+  const endMinute = endTotalMinutes % 60;
+
+  return `${String(endHour).padStart(2, '0')}:${String(endMinute).padStart(2, '0')}`;
+}
+
+function formatDurationLabel(durationMinutes) {
+  const safeDuration = normalizeDurationMinutes(durationMinutes);
+  if (safeDuration % 60 === 0) {
+    const hours = safeDuration / 60;
+    return `${hours} hour${hours > 1 ? 's' : ''}`;
+  }
+  return `${safeDuration} minutes`;
+}
+
 // Helper functions for booking flow
 function parseBookingParams(postbackData) {
   const params = {};
@@ -2400,6 +2490,8 @@ function parseBookingParams(postbackData) {
       params.page = parseInt(part.split('page=')[1]);
     } else if (part.includes('amount=')) {
       params.amount = parseFloat(part.split('amount=')[1]);
+    } else if (part.includes('duration=')) {
+      params.duration = normalizeDurationMinutes(part.split('duration=')[1]);
     }
   });
   
@@ -2598,15 +2690,11 @@ function generateTimeSlots(openTime, closeTime, intervalMinutes = 30, selectedDa
   return slots;
 }
 
-async function getAvailableTables(selectedDate, selectedTime, guestCount) {
+async function getAvailableTables(selectedDate, selectedTime, guestCount, durationMinutes = DEFAULT_BOOKING_DURATION_MINUTES) {
   try {
     await dbConnect();
-    
-    // Calculate end time (2-hour booking duration)
-    const [startHour, startMinute] = selectedTime.split(':').map(Number);
-    const endTime = new Date();
-    endTime.setHours(startHour + 2, startMinute);
-    const endTimeStr = endTime.toTimeString().slice(0, 5);
+    const safeDuration = normalizeDurationMinutes(durationMinutes);
+    const endTimeStr = calculateEndTime(selectedTime, safeDuration);
     
     // Get floorplan using specific restaurant ID
     const restaurantId = await getRestaurantId();
@@ -2652,13 +2740,10 @@ async function getAvailableTables(selectedDate, selectedTime, guestCount) {
 }
 
 // Optimized version that accepts restaurantId to avoid redundant calls
-async function getAvailableTablesOptimized(selectedDate, selectedTime, guestCount, restaurantId) {
+async function getAvailableTablesOptimized(selectedDate, selectedTime, guestCount, restaurantId, durationMinutes = DEFAULT_BOOKING_DURATION_MINUTES) {
   try {
-    // Calculate end time (2-hour booking duration)
-    const [startHour, startMinute] = selectedTime.split(':').map(Number);
-    const endTime = new Date();
-    endTime.setHours(startHour + 2, startMinute);
-    const endTimeStr = endTime.toTimeString().slice(0, 5);
+    const safeDuration = normalizeDurationMinutes(durationMinutes);
+    const endTimeStr = calculateEndTime(selectedTime, safeDuration);
     
     // Get floorplan and bookings in parallel
     const [floorplan, existingBookings] = await Promise.all([
@@ -2750,7 +2835,7 @@ async function getFloorplanImageOptimized(restaurantId) {
 async function createBookingFromLine(bookingData, floorplanId) {
   try {
     // This function replicates the booking creation logic from your existing API
-    const { tableId, date, startTime, endTime, guestCount, restaurantId, customerData, pricingData } = bookingData;
+    const { tableId, date, startTime, endTime, durationMinutes, guestCount, restaurantId, customerData, pricingData } = bookingData;
     
     // Check table availability (filtered by restaurant ID)
     const isAvailable = await Booking.isTableAvailable(tableId, date, startTime, endTime, restaurantId);
@@ -2767,6 +2852,7 @@ async function createBookingFromLine(bookingData, floorplanId) {
       date: new Date(date),
       startTime: startTime,
       endTime: endTime,
+      durationMinutes,
       guestCount: guestCount,
       status: 'pending', // Changed to pending for staff confirmation
       customerName: `${customerData.firstName} ${customerData.lastName}`.trim(),
@@ -3730,6 +3816,10 @@ async function handleEvent(event) {
 
 export async function POST(req) {
   try {
+    if (!client) {
+      return NextResponse.json({ error: 'LINE webhook is not configured' }, { status: 503 });
+    }
+
     const startTime = Date.now();
     const body = await req.text();
     const signature = req.headers.get("x-line-signature");

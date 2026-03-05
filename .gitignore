@@ -43,3 +43,9 @@ next-env.d.ts
 
 # clerk configuration (can include secrets)
 /.clerk/
+
+# local tooling/runtime artifacts
+ngrok.exe
+ngrok.zip
+temp-registration-tokens.json
+-remote origin main

@@ -4,13 +4,8 @@ import { useEffect, useRef, useState } from "react";
 import { useRouter, useParams } from 'next/navigation';
 import Head from "next/head";
 import * as THREE from 'three';
-import { createScene, createFloor, initializeOrbitControls } from '@/scripts/floor';
+import { createScene, createFloor } from '@/scripts/floor';
 import { UIManager } from '@/scripts/managers/UIManager';
-import { DragManager } from '@/scripts/managers/DragManager';
-import { WallManager } from '@/scripts/wallManager';
-import { DoorManager } from '@/scripts/managers/DoorManager';
-import { WindowManager } from '@/scripts/managers/WindowManager';
-import { chair, table, sofa, roundTable, create2SeaterTable } from '@/scripts/asset';
 import { FaBoxOpen, FaTrash, FaArrowsAltH, FaSave, FaFolderOpen } from "react-icons/fa";
 import { RiLayoutGridFill } from "react-icons/ri";
 import styles from "@/css/ui.css";
@@ -122,9 +117,6 @@ export default function EditFloorplan() {
         uiManager.wallManager.createPreviewWall();
         scene.add(uiManager.wallManager.previewWall);
 
-        // Initialize event listeners for wall preview
-        uiManager.initializeEventListeners();
-
         // Load the scene data
         if (params.id) {
           try {
@@ -221,36 +213,11 @@ export default function EditFloorplan() {
         };
         window.addEventListener('resize', handleResize);
 
-        // Instead, just initialize the dragManager
-        const dragManager = new DragManager(uiManager);
-        uiManager.dragManager = dragManager;
-
         // Add to managersRef for cleanup
         managersRef.current = {
           uiManager,
-          dragManager
+          dragManager: uiManager.dragManager
         };
-
-        // After initializing uiManager and wallManager, add:
-        const handleMouseMove = (event) => {
-          if (uiManager.wallManager.isAddWallMode) {
-            const rect = renderer.domElement.getBoundingClientRect();
-            const mouse = new THREE.Vector2(
-              ((event.clientX - rect.left) / rect.width) * 2 - 1,
-              -((event.clientY - rect.top) / rect.height) * 2 + 1
-            );
-
-            const raycaster = new THREE.Raycaster();
-            raycaster.setFromCamera(mouse, camera);
-            const intersects = raycaster.intersectObject(floor);
-
-            if (intersects.length > 0) {
-              uiManager.wallManager.updatePreviewWall(intersects[0].point);
-            }
-          }
-        };
-
-        renderer.domElement.addEventListener('mousemove', handleMouseMove);
 
         setIsLoading(false);
 
@@ -273,7 +240,6 @@ export default function EditFloorplan() {
             });
             sceneRef.current = null;
           }
-          renderer.domElement.removeEventListener('mousemove', handleMouseMove);
         };
       } catch (error) {
         console.error('Error initializing scene:', error);

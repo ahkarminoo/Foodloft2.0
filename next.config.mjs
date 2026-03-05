@@ -32,17 +32,13 @@ const nextConfig = {
   env: {
     NEXTAUTH_SECRET: process.env.NEXTAUTH_SECRET,
     NEXTAUTH_URL: process.env.NEXTAUTH_URL,
-    NEXT_PUBLIC_BASE_URL: process.env.NEXT_PUBLIC_BASE_URL
+    NEXT_PUBLIC_BASE_URL: process.env.NEXT_PUBLIC_BASE_URL,
+    JWT_SECRET: process.env.JWT_SECRET
   },
   eslint: {
     ignoreDuringBuilds: true
   },
   images: {
-    domains: [
-      "lh3.googleusercontent.com",
-      "storage.googleapis.com",
-      // add any other domains you need here
-    ],
     remotePatterns: [
       {
         protocol: 'https',
@@ -96,9 +92,6 @@ const nextConfig = {
   },
   // Disable React StrictMode in development for better 3D performance
   reactStrictMode: process.env.NODE_ENV === 'production',
-  env: {
-    JWT_SECRET: process.env.JWT_SECRET,
-  },
   // Webpack optimizations for Three.js
   webpack: (config, { dev, isServer }) => {
     if (!isServer && !dev) {

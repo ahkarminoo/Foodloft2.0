@@ -96,6 +96,8 @@ export class UIManager {
         canvas.addEventListener('mousemove', (event) => {
             // Check for drag/rotation FIRST to prevent camera movement
             if (this.dragManager && (this.dragManager.isDragging || this.dragManager.isRotating)) {
+                event.preventDefault();
+                event.stopPropagation();
                 this.dragManager.handleMouseMove(event);
                 return; // Exit early to prevent other handlers
             }
@@ -115,7 +117,7 @@ export class UIManager {
                     this.dragManager.handleMouseMove(event);
                 }
             }
-        });
+        }, true);
 
         canvas.addEventListener('mousedown', (event) => {
             if (this.isRemoveMode) {
@@ -129,15 +131,20 @@ export class UIManager {
             } else {
                 if (this.dragManager) {
                     this.dragManager.handleMouseDown(event);
+                    if (this.dragManager.isDragging || this.dragManager.isRotating) {
+                        event.preventDefault();
+                        event.stopPropagation();
+                    }
                 }
             }
-        });
+        }, true);
 
-        canvas.addEventListener('mouseup', () => {
+        canvas.addEventListener('mouseup', (event) => {
             if (this.dragManager) {
                 this.dragManager.stopDragging();
+                event.stopPropagation();
             }
-        });
+        }, true);
 
         canvas.addEventListener('contextmenu', (e) => {
             e.preventDefault();

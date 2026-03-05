@@ -12,6 +12,31 @@ import ReviewSection from '@/components/ReviewSection';
 import { MdRestaurantMenu } from 'react-icons/md';
 import { RiImageAddLine } from 'react-icons/ri';
 
+const DEFAULT_RESTAURANT_ID = process.env.NEXT_PUBLIC_DEFAULT_RESTAURANT_ID || "68d548d7a11657653c2d49ec";
+const LINE_LIFF_ID = process.env.NEXT_PUBLIC_LINE_LIFF_ID || "2007787204-zGYZn1ZE";
+
+function toLatLngLiteral(coordinates) {
+  if (!coordinates) return null;
+
+  if (Array.isArray(coordinates) && coordinates.length >= 2) {
+    const lng = Number(coordinates[0]);
+    const lat = Number(coordinates[1]);
+    if (Number.isFinite(lat) && Number.isFinite(lng)) {
+      return { lat, lng };
+    }
+    return null;
+  }
+
+  const lat = Number(coordinates.lat ?? coordinates.latitude);
+  const lng = Number(coordinates.lng ?? coordinates.lon ?? coordinates.longitude);
+
+  if (Number.isFinite(lat) && Number.isFinite(lng)) {
+    return { lat, lng };
+  }
+
+  return null;
+}
+
 export default function RestaurantFloorplanPage() {
   const params = useParams();
   const [restaurant, setRestaurant] = useState(null);
@@ -38,15 +63,16 @@ export default function RestaurantFloorplanPage() {
     }
     
     // Fallback to default restaurant ID
-    return "68d548d7a11657653c2d49ec"; // TODO: Make this configurable
+    return DEFAULT_RESTAURANT_ID;
   };
   
   const restaurantId = getRestaurantId();
+  const restaurantCoordinates = toLatLngLiteral(restaurant?.location?.coordinates);
 
   useEffect(() => {
     if (typeof window !== "undefined") {
       function startLiff() {
-        window.liff.init({ liffId: "2007787204-zGYZn1ZE" })
+        window.liff.init({ liffId: LINE_LIFF_ID })
           .then(() => {
             if (window.liff.isInClient()) {
               // Use sessionStorage to prevent infinite login loop
@@ -460,7 +486,7 @@ export default function RestaurantFloorplanPage() {
             </div>
 
             {/* Map Card */}
-            {restaurant.location?.coordinates && (
+            {restaurantCoordinates && (
               <div className="bg-white rounded-xl p-3 lg:p-4 shadow-sm hover:shadow-md transition-all">
                 <div className="flex items-center gap-2 lg:gap-3 text-[#141517] mb-2">
                   <FaMapMarkerAlt className="text-[#FF4F18]" />
@@ -472,10 +498,10 @@ export default function RestaurantFloorplanPage() {
                 <div className="h-[150px] lg:h-[200px] rounded-lg overflow-hidden">
                   <GoogleMap
                     mapContainerStyle={{ width: '100%', height: '100%' }}
-                    center={restaurant.location.coordinates}
+                    center={restaurantCoordinates}
                     zoom={15}
                   >
-                    <Marker position={restaurant.location.coordinates} />
+                    <Marker position={restaurantCoordinates} />
                   </GoogleMap>
                 </div>
               </div>

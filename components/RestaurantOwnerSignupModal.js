@@ -7,8 +7,6 @@ import { faGoogle } from "@fortawesome/free-brands-svg-icons";
 import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import Image from "next/image";
-import { auth } from "@/lib/firebase-config";
-import { signInWithPopup, GoogleAuthProvider } from "firebase/auth";
 
 export default function RestaurantOwnerSignupModal({ isOpen, onClose, onOpenLoginModal }) {
   const [formData, setFormData] = useState({
@@ -105,82 +103,8 @@ export default function RestaurantOwnerSignupModal({ isOpen, onClose, onOpenLogi
     setLoading(true);
     setError("");
     try {
-      // Clear any existing customer session first
-      localStorage.removeItem("customerUser");
-      localStorage.removeItem("customerToken");
-      
-      // Set a flag to indicate restaurant owner flow is starting
-      localStorage.setItem("restaurantOwnerFlow", "true");
-      
-      const provider = new GoogleAuthProvider();
-      const result = await signInWithPopup(auth, provider);
-      
-      // Create restaurant owner profile
-      const signupResponse = await fetch("/api/restaurant-owner/signup", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          email: result.user.email,
-          firebaseUid: result.user.uid,
-          firstName: result.user.displayName?.split(' ')[0] || '',
-          lastName: result.user.displayName?.split(' ').slice(1).join(' ') || 'User',
-          profileImage: result.user.photoURL || '',
-          contactNumber: "Not provided" // Default for Google users
-        }),
-      });
-
-      if (!signupResponse.ok) {
-        let errorData;
-        try {
-          errorData = await signupResponse.json();
-        } catch (e) {
-          console.error('Failed to parse error response as JSON:', e);
-          errorData = { message: `HTTP ${signupResponse.status}: ${signupResponse.statusText}` };
-        }
-        
-        console.error('Restaurant owner signup failed:', {
-          status: signupResponse.status,
-          statusText: signupResponse.statusText,
-          url: signupResponse.url,
-          errorData,
-          requestBody: {
-            email: result.user.email,
-            firebaseUid: result.user.uid,
-            firstName: result.user.displayName?.split(' ')[0] || '',
-            lastName: result.user.displayName?.split(' ').slice(1).join(' ') || '',
-            profileImage: result.user.photoURL || '',
-            contactNumber: "Not provided"
-          }
-        });
-        throw new Error(errorData.message || `Failed to create restaurant owner profile (${signupResponse.status})`);
-      }
-
-      const signupData = await signupResponse.json();
-      
-      // Auto-login after successful signup
-      const loginResponse = await fetch("/api/restaurant-owner/login", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ firebaseUid: result.user.uid }),
-      });
-
-      if (loginResponse.ok) {
-        const loginData = await loginResponse.json();
-        // Clear customer data and set restaurant owner data
-        localStorage.removeItem("customerUser");
-        localStorage.removeItem("customerToken");
-        localStorage.removeItem("restaurantOwnerFlow");
-        localStorage.setItem("restaurantOwnerUser", JSON.stringify(loginData.user));
-        localStorage.setItem("restaurantOwnerToken", loginData.token);
-        
-        router.push('/restaurant-owner/setup');
-        onClose();
-      } else {
-        throw new Error("Failed to login after Google signup");
-      }
+      setError("Google signup is temporarily disabled. Use email/password signup.");
     } catch (err) {
-      // Clean up flow flag on error
-      localStorage.removeItem("restaurantOwnerFlow");
       setError(err.message);
     } finally {
       setLoading(false);
@@ -213,6 +137,7 @@ export default function RestaurantOwnerSignupModal({ isOpen, onClose, onOpenLogi
               src="/images/body-images/alexander-fae-TivEEYzzhik-unsplash (1).jpg"
               alt="Restaurant ambiance"
               fill
+              sizes="(max-width: 768px) 100vw, 40vw"
               className="object-cover"
             />
             <div className="absolute inset-0 z-20 p-6 flex flex-col justify-end">

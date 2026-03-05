@@ -6,6 +6,41 @@ import { verifyFirebaseAuth } from '@/lib/firebase-admin';
 import User from '@/models/user';
 import Restaurant from '@/models/Restaurants';
 
+function timeToMinutes(timeStr) {
+    if (!timeStr || typeof timeStr !== 'string') return NaN;
+
+    const trimmed = timeStr.trim();
+    const twelveHourMatch = trimmed.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
+    if (twelveHourMatch) {
+        let hours = Number(twelveHourMatch[1]);
+        const minutes = Number(twelveHourMatch[2]);
+        const period = twelveHourMatch[3].toUpperCase();
+
+        if (period === 'PM' && hours !== 12) hours += 12;
+        if (period === 'AM' && hours === 12) hours = 0;
+        return hours * 60 + minutes;
+    }
+
+    const twentyFourHourMatch = trimmed.match(/^(\d{1,2}):(\d{2})$/);
+    if (twentyFourHourMatch) {
+        const hours = Number(twentyFourHourMatch[1]);
+        const minutes = Number(twentyFourHourMatch[2]);
+        return hours * 60 + minutes;
+    }
+
+    return NaN;
+}
+
+function hasOverlap(startA, endA, startB, endB) {
+    const aStart = timeToMinutes(startA);
+    const aEnd = timeToMinutes(endA);
+    const bStart = timeToMinutes(startB);
+    const bEnd = timeToMinutes(endB);
+
+    if ([aStart, aEnd, bStart, bEnd].some(Number.isNaN)) return false;
+    return aStart < bEnd && aEnd > bStart;
+}
+
 export async function POST(request) {
     try {
         await dbConnect();
@@ -85,50 +120,62 @@ export async function POST(request) {
 
         const lockDate = new Date(date);
         lockDate.setHours(0, 0, 0, 0);
+        const nextDate = new Date(lockDate);
+        nextDate.setDate(nextDate.getDate() + 1);
         const expiresAt = new Date(Date.now() + (holdDurationMinutes * 60 * 1000));
 
-        // Check if table is already booked for this time
-        const existingBooking = await Booking.findOne({
+        // Check overlap with existing bookings
+        const dayBookings = await Booking.find({
             restaurantId,
             tableId,
-            date: lockDate,
-            startTime,
-            endTime,
+            date: { $gte: lockDate, $lt: nextDate },
             status: { $in: ['pending', 'confirmed'] }
-        });
+        }).select('_id status customerName startTime endTime');
 
-        if (existingBooking) {
+        const conflictingBooking = dayBookings.find((booking) =>
+            hasOverlap(booking.startTime, booking.endTime, startTime, endTime)
+        );
+
+        if (conflictingBooking) {
             return NextResponse.json(
                 { 
                     error: 'Table is already booked for this time slot',
                     conflict: {
                         type: 'booking',
-                        bookingId: existingBooking._id,
-                        status: existingBooking.status
+                        bookingId: conflictingBooking._id,
+                        status: conflictingBooking.status,
+                        startTime: conflictingBooking.startTime,
+                        endTime: conflictingBooking.endTime
                     }
                 },
                 { status: 409 }
             );
         }
 
-        // Check if table is already locked
-        const existingLock = await TableLock.findActiveLocks(
-            restaurantId, 
-            tableId, 
-            lockDate, 
-            startTime, 
-            endTime
+        // Check overlap with active locks
+        const dayActiveLocks = await TableLock.find({
+            restaurantId,
+            tableId,
+            date: { $gte: lockDate, $lt: nextDate },
+            status: 'active',
+            expiresAt: { $gt: new Date() }
+        }).select('_id lockId expiresAt userId startTime endTime');
+
+        const conflictingLock = dayActiveLocks.find((lock) =>
+            hasOverlap(lock.startTime, lock.endTime, startTime, endTime)
         );
 
-        if (existingLock.length > 0) {
+        if (conflictingLock) {
             return NextResponse.json(
                 { 
                     error: 'Table is currently locked by another user',
                     conflict: {
                         type: 'lock',
-                        lockId: existingLock[0].lockId,
-                        expiresAt: existingLock[0].expiresAt,
-                        lockedBy: existingLock[0].userId.toString() === user._id.toString() ? 'self' : 'other'
+                        lockId: conflictingLock.lockId,
+                        expiresAt: conflictingLock.expiresAt,
+                        startTime: conflictingLock.startTime,
+                        endTime: conflictingLock.endTime,
+                        lockedBy: conflictingLock.userId.toString() === user._id.toString() ? 'self' : 'other'
                     }
                 },
                 { status: 409 }
