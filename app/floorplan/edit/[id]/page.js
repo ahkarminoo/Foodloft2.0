@@ -117,23 +117,49 @@ export default function EditFloorplan() {
         uiManager.wallManager.createPreviewWall();
         scene.add(uiManager.wallManager.previewWall);
 
-        // Load the scene data
-        if (params.id) {
-          try {
-            const response = await fetch(`/api/scenes/${params.id}`, {
-              headers: {
-                'Authorization': `Bearer ${token}`
-              }
-            });
+         // Load the scene data (cached + progressive)
+         if (params.id) {
+           try {
+             const cacheKey = `floorplan_${params.id}`;
+             const tsKey = `floorplan_${params.id}_ts`;
+             const staleMs = 3 * 60 * 1000;
 
-            if (!response.ok) {
-              throw new Error('Failed to load scene');
-            }
+             let sceneData;
+             try {
+               const cached = localStorage.getItem(cacheKey);
+               const tsRaw = localStorage.getItem(tsKey);
+               const ts = tsRaw ? Number(tsRaw) : 0;
+               const fresh = cached && ts && (Date.now() - ts) < staleMs;
+               if (fresh) {
+                 sceneData = JSON.parse(cached);
+               }
+             } catch (e) {
+               console.warn('Failed to read floorplan cache:', e);
+             }
 
-            const sceneData = await response.json();
-            
-            // Clear existing scene first
-            uiManager.fileManager.clearScene();
+             if (!sceneData) {
+               const response = await fetch(`/api/scenes/${params.id}`, {
+                 headers: {
+                   'Authorization': `Bearer ${token}`
+                 }
+               });
+
+               if (!response.ok) {
+                 throw new Error('Failed to load scene');
+               }
+
+               sceneData = await response.json();
+
+               try {
+                 localStorage.setItem(cacheKey, JSON.stringify(sceneData));
+                 localStorage.setItem(tsKey, String(Date.now()));
+               } catch (e) {
+                 console.warn('Failed to write floorplan cache:', e);
+               }
+             }
+             
+             // Clear existing scene first
+             uiManager.fileManager.clearScene();
             
             // Create a map to store walls and their UUIDs
             const wallMap = new Map();
@@ -150,12 +176,12 @@ export default function EditFloorplan() {
               }
             }
 
-            // Second pass: Create doors and windows
-            const openingsObjects = sceneData.data.objects.filter(obj => 
-              obj.type === 'door' || obj.type === 'window'
-            );
-            for (const objData of openingsObjects) {
-              const opening = await uiManager.fileManager.recreateObject(objData, false, wallMap);
+             // Second pass: Create doors and windows
+             const openingsObjects = sceneData.data.objects.filter(obj => 
+               obj.type === 'door' || obj.type === 'window'
+             );
+             for (const objData of openingsObjects) {
+               const opening = await uiManager.fileManager.recreateObject(objData, false, wallMap);
               if (opening) {
                 const parentWall = wallMap.get(objData.userData.parentWallId);
                 if (parentWall) {
@@ -164,37 +190,124 @@ export default function EditFloorplan() {
                   opening.userData.parentWall = parentWall;
                 }
               }
-            }
+             }
 
-            // Third pass: Create furniture
-            const furnitureObjects = sceneData.data.objects.filter(obj => 
-              obj.type === 'furniture'
-            );
-            for (const objData of furnitureObjects) {
-              const furniture = await uiManager.fileManager.recreateObject(objData, false, wallMap);
-              if (furniture) {
-                // Preserve furniture properties
-                furniture.userData = {
-                  ...objData.userData,
-                  isMovable: true,
-                  isRotatable: true,
-                  isInteractable: true,
-                  // Add table-specific properties if it's a table
-                  ...(objData.userData.isTable && {
-                    maxCapacity: objData.userData.is2SeaterTable ? 2 : (objData.userData.maxCapacity || 4),
-                    bookingStatus: objData.userData.bookingStatus || 'available',
-                    currentBooking: objData.userData.currentBooking || null,
-                    bookingHistory: objData.userData.bookingHistory || []
-                  })
-                };
-                scene.add(furniture);
-              }
-            }
+             // Third pass: Progressive furniture loading
+             const furnitureObjects = sceneData.data.objects.filter(obj => obj.type === 'furniture');
 
-          } catch (error) {
-            console.error('Error loading scene:', error);
-          }
-        }
+             const placeholderMaterialTemplate = new THREE.MeshPhongMaterial({
+               color: 0x8a8a8a,
+               transparent: true,
+               opacity: 0.45
+             });
+
+             const getPlaceholderDims = (userData = {}) => {
+               if (userData.isChair) return [0.7, 1.0, 0.7];
+               if (userData.isSofa) return [1.6, 1.0, 0.8];
+               if (userData.isTable) {
+                 if (userData.isRoundTable) return [1.1, 0.8, 1.1];
+                 if (userData.maxCapacity === 2 || userData.is2SeaterTable) return [0.9, 0.8, 0.9];
+                 if (userData.maxCapacity === 8) return [1.6, 0.8, 1.6];
+                 return [1.2, 0.8, 1.2];
+               }
+               if (userData.isPlant) return [0.6, 1.2, 0.6];
+               if (userData.isFridge) return [1.2, 2.0, 0.7];
+               if (userData.isFoodStand) return [1.2, 0.9, 0.7];
+               if (userData.isDrinkStand) return [0.9, 0.9, 0.6];
+               if (userData.isIceBox) return [1.0, 0.9, 0.7];
+               if (userData.isIceCreamBox) return [1.5, 1.1, 0.9];
+               return [1.0, 1.0, 1.0];
+             };
+
+             const placeholders = new Map();
+             furnitureObjects.forEach((objData, idx) => {
+               const key = objData.objectId || objData.userData?.uuid || objData._id || String(idx);
+               const [w, h, d] = getPlaceholderDims(objData.userData);
+               const geom = new THREE.BoxGeometry(w, h, d);
+               geom.translate(0, h / 2, 0);
+               const mesh = new THREE.Mesh(geom, placeholderMaterialTemplate.clone());
+               mesh.receiveShadow = true;
+
+               const placeholderGroup = new THREE.Group();
+               placeholderGroup.add(mesh);
+               placeholderGroup.position.fromArray(objData.position);
+               placeholderGroup.rotation.set(objData.rotation.x, objData.rotation.y, objData.rotation.z);
+               placeholderGroup.scale.fromArray(objData.scale);
+               placeholderGroup.userData = {
+                 ...objData.userData,
+                 isMovable: true,
+                 isRotatable: true,
+                 isInteractable: true,
+                 ...(objData.userData?.isTable && {
+                   maxCapacity: objData.userData.is2SeaterTable ? 2 : (objData.userData.maxCapacity || 4),
+                   bookingStatus: objData.userData.bookingStatus || 'available',
+                   currentBooking: objData.userData.currentBooking || null,
+                   bookingHistory: objData.userData.bookingHistory || []
+                 })
+               };
+
+               scene.add(placeholderGroup);
+               placeholders.set(key, placeholderGroup);
+             });
+
+             // Load real furniture in parallel and swap placeholders as they finish
+             const loadPromises = furnitureObjects.map(async (objData, idx) => {
+               const key = objData.objectId || objData.userData?.uuid || objData._id || String(idx);
+               const placeholder = placeholders.get(key);
+
+               const furniture = await uiManager.fileManager.recreateObject(objData, false, wallMap);
+               if (furniture) {
+                 // If the user moved the placeholder while loading, preserve its latest transform
+                 if (placeholder) {
+                   furniture.position.copy(placeholder.position);
+                   furniture.rotation.copy(placeholder.rotation);
+                   furniture.scale.copy(placeholder.scale);
+                 }
+
+                 // Preserve furniture properties
+                 const preservedUserData = {
+                   ...objData.userData,
+                   isMovable: true,
+                   isRotatable: true,
+                   isInteractable: true,
+                   ...(objData.userData?.isTable && {
+                     maxCapacity: objData.userData.is2SeaterTable ? 2 : (objData.userData.maxCapacity || 4),
+                     bookingStatus: objData.userData.bookingStatus || 'available',
+                     currentBooking: objData.userData.currentBooking || null,
+                     bookingHistory: objData.userData.bookingHistory || []
+                   })
+                 };
+
+                 furniture.userData = {
+                   ...furniture.userData,
+                   ...preservedUserData
+                 };
+
+                 // Swap placeholder
+                 if (placeholder) {
+                   scene.remove(placeholder);
+                   placeholder.traverse((o) => {
+                     if (o.geometry) o.geometry.dispose();
+                     if (o.material) {
+                       if (Array.isArray(o.material)) o.material.forEach((m) => m.dispose());
+                       else o.material.dispose();
+                     }
+                   });
+                   placeholders.delete(key);
+                 }
+
+                 scene.add(furniture);
+               }
+               return furniture;
+             });
+
+             // Keep loading in background; editor is usable with placeholders
+             Promise.allSettled(loadPromises).catch(() => {});
+
+           } catch (error) {
+             console.error('Error loading scene:', error);
+           }
+         }
 
         // Animation loop
         const animate = () => {
@@ -337,11 +450,7 @@ export default function EditFloorplan() {
             </div>
         </div>
 
-        <div className="loading-overlay" id="loading-overlay">
-          <div className="spinner">
-            <i className="bi bi-arrow-repeat"></i>
-          </div>
-        </div>
+        {/* Loading overlay removed: placeholders render immediately */}
       </div>
     </>
   );

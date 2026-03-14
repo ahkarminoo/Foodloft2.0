@@ -1,10 +1,45 @@
 import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
 import * as THREE from 'three';
 
+// Module-level cache (persists for lifetime of browser tab)
+const modelCache = new Map();
+
+async function loadCached(path) {
+    let cached = modelCache.get(path);
+
+    if (!cached) {
+        const loader = new OBJLoader();
+        cached = loader.loadAsync(path)
+            .then((template) => template)
+            .catch((err) => {
+                // Allow retries if the first load failed
+                modelCache.delete(path);
+                throw err;
+            });
+
+        modelCache.set(path, cached);
+    }
+
+    const template = await cached;
+    const clone = template.clone(true);
+
+    // Ensure per-instance materials (so color/userData changes don't leak)
+    clone.traverse((child) => {
+        if (child && child.isMesh && child.material) {
+            if (Array.isArray(child.material)) {
+                child.material = child.material.map((m) => (m && m.clone ? m.clone() : m));
+            } else if (child.material.clone) {
+                child.material = child.material.clone();
+            }
+        }
+    });
+
+    return clone;
+}
+
 export async function chair(scene) {
-    const loader = new OBJLoader();
     try {
-        const group = await loader.loadAsync('/models/chair/chair/3SM.obj');
+        const group = await loadCached('/models/chair/chair/3SM.obj');
         if (group.children.length > 0) {
             const material = new THREE.MeshPhongMaterial({
                 color: 0xffffff,
@@ -34,9 +69,8 @@ export async function chair(scene) {
 }
 
 export async function table(scene) {
-    const loader = new OBJLoader();
     try {
-        const group = await loader.loadAsync('/models/table/ractangleTable/Table.obj');
+        const group = await loadCached('/models/table/ractangleTable/Table.obj');
         if (group.children.length > 0) {
             const material = new THREE.MeshPhongMaterial({
                 color: 0xffffff,
@@ -67,9 +101,8 @@ export async function table(scene) {
 }
 
 export async function sofa(scene) {
-    const loader = new OBJLoader();
     try {
-        const group = await loader.loadAsync('/models/chair/couch/couch.obj');
+        const group = await loadCached('/models/chair/couch/couch.obj');
         if (group.children.length > 0) {
             const material = new THREE.MeshPhongMaterial({
                 color: 0xffffff,
@@ -101,9 +134,8 @@ export async function sofa(scene) {
 }
 
 export async function roundTable(scene) {
-    const loader = new OBJLoader();
     try {
-        const group = await loader.loadAsync('/models/table/roundTable/roundTable.obj');
+        const group = await loadCached('/models/table/roundTable/roundTable.obj');
         if (group.children.length > 0) {
             const material = new THREE.MeshPhongMaterial({
                 color: 0xffffff,
@@ -136,9 +168,8 @@ export async function roundTable(scene) {
 }
 
 export async function create2SeaterTable(scene) {
-    const loader = new OBJLoader();
     try {
-        const group = await loader.loadAsync('/models/table/2seater_squareTable/3d-model.obj');
+        const group = await loadCached('/models/table/2seater_squareTable/3d-model.obj');
         if (group.children.length > 0) {
             const material = new THREE.MeshPhongMaterial({
                 color: 0xffffff,
@@ -170,9 +201,8 @@ export async function create2SeaterTable(scene) {
 }
 
 export async function create8SeaterTable(scene) {
-    const loader = new OBJLoader();
     try {
-        const group = await loader.loadAsync('/models/table/6seater_roundtable/6seaterRound.obj');
+        const group = await loadCached('/models/table/6seater_roundtable/6seaterRound.obj');
         if (group.children.length > 0) {
             const material = new THREE.MeshPhongMaterial({
                 color: 0xffffff,
@@ -204,11 +234,10 @@ export async function create8SeaterTable(scene) {
 }
 
 export async function plant01(scene){
-    const loader = new OBJLoader();
     console.log("Starting to load plant01 model...");
     try {
         console.log("Loading from path:", '/models/decorations/indoorPlants/vase01.obj');
-        const group = await loader.loadAsync('/models/decorations/indoorPlants/vase01.obj');
+        const group = await loadCached('/models/decorations/indoorPlants/vase01.obj');
         console.log("Plant01 model loaded, children count:", group.children.length);
         if (group.children.length > 0) {
             // Create different materials for different parts
@@ -262,11 +291,10 @@ export async function plant01(scene){
     }
 }
 export async function plant02(scene){
-    const loader = new OBJLoader();
     console.log("Starting to load plant02 model...");
     try {
         console.log("Loading from path:", '/models/decorations/indoorPlants/vase02.obj');
-        const group = await loader.loadAsync('/models/decorations/indoorPlants/vase02.obj');
+        const group = await loadCached('/models/decorations/indoorPlants/vase02.obj');
         console.log("Plant02 model loaded, children count:", group.children.length);
         
         if (group.children.length > 0) {

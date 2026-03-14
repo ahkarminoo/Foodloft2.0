@@ -225,7 +225,20 @@ export default function PublicFloorPlan({ floorplanData, floorplanId, restaurant
   const [availableTimeSlots, setAvailableTimeSlots] = useState([]);
   const [restaurant, setRestaurant] = useState(null);
   const [availableTables, setAvailableTables] = useState(new Set());
+  const [unavailableByTable, setUnavailableByTable] = useState({});
   const [isAvailabilityLoading, setIsAvailabilityLoading] = useState(false);
+
+  // Cache floorplan JSON (non-sensitive) for fast revisits
+  useEffect(() => {
+    try {
+      if (!floorplanId || !floorplanData) return;
+      localStorage.setItem(`floorplan_${floorplanId}`, JSON.stringify({ data: floorplanData }));
+      localStorage.setItem(`floorplan_${floorplanId}_ts`, String(Date.now()));
+    } catch (e) {
+      // Best-effort cache only
+      console.warn('Failed to write floorplan cache:', e);
+    }
+  }, [floorplanId, floorplanData]);
 
   const durationOptions = [
     { value: 60, label: '1 hour' },
@@ -310,6 +323,7 @@ export default function PublicFloorPlan({ floorplanData, floorplanId, restaurant
 
   const dateRef = useRef(selectedDate);
   const timeRef = useRef(selectedTime);
+  const unavailableByTableRef = useRef(unavailableByTable);
   const initialAuthSnapshotRef = useRef({
     authLoading,
     isAuthenticated,
@@ -331,6 +345,10 @@ export default function PublicFloorPlan({ floorplanData, floorplanId, restaurant
   useEffect(() => {
     timeRef.current = selectedTime;
   }, [selectedTime]);
+
+  useEffect(() => {
+    unavailableByTableRef.current = unavailableByTable;
+  }, [unavailableByTable]);
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
@@ -441,37 +459,8 @@ export default function PublicFloorPlan({ floorplanData, floorplanId, restaurant
           performanceMonitor.start();
         }
 
-        // Create simplified loading overlay
-        const loadingOverlay = document.createElement('div');
-        loadingOverlay.className = 'loading-overlay';
-        loadingOverlay.innerHTML = `
-          <div class="loading-container">
-            <div class="loading-logo animate-pulse"></div>
-            <div class="loading-text animate-bounce">Loading 3D Experience</div>
-            <div class="loading-subtext">Preparing your restaurant view...</div>
-            
-            <div class="loading-progress-container">
-              <div class="loading-progress-bar" id="progress-bar"></div>
-            </div>
-            
-            <div class="loading-message" id="loading-message">Setting up scene...</div>
-          </div>
-        `;
-        sceneHostRef.current.appendChild(loadingOverlay);
-        loadingOverlayRef.current = loadingOverlay;
-
-        // Update loading progress function
-        const updateLoadingProgress = (text, progress) => {
-          const progressElement = loadingOverlay.querySelector('#progress-bar');
-          const messageElement = loadingOverlay.querySelector('#loading-message');
-          
-          if (progressElement) {
-            progressElement.style.width = `${progress}%`;
-          }
-          if (messageElement) {
-            messageElement.textContent = text;
-          }
-        };
+        // Loading overlay removed: placeholders render immediately
+        const updateLoadingProgress = () => {};
 
         // Initialize Three.js scene
         console.log('Creating WebGL renderer');
@@ -600,154 +589,10 @@ export default function PublicFloorPlan({ floorplanData, floorplanId, restaurant
             wallMap.set(objData.userData.uuid, wall);
           }
 
-          // Load furniture progressively for better performance
-          console.log("Loading furniture progressively...");
-          updateLoadingProgress('Loading furniture...', 70);
-          
-          const tableObjects = floorplanData.objects.filter(obj => obj.userData?.isTable);
-          const chairObjects = floorplanData.objects.filter(obj => obj.userData?.isChair);
-          const plantObjects = floorplanData.objects.filter(obj => 
-            obj.userData?.isPlant || obj.userData?.isPlant01 || obj.userData?.isPlant02
-          );
-          
-          // Restaurant Equipment
-          const fridgeObjects = floorplanData.objects.filter(obj => obj.userData?.isFridge);
-          const foodStandObjects = floorplanData.objects.filter(obj => obj.userData?.isFoodStand);
-          const drinkStandObjects = floorplanData.objects.filter(obj => obj.userData?.isDrinkStand);
-          const iceBoxObjects = floorplanData.objects.filter(obj => obj.userData?.isIceBox);
-          const iceCreamBoxObjects = floorplanData.objects.filter(obj => obj.userData?.isIceCreamBox);
-
-          // Create model loading promises
-          const modelPromises = [];
-          
-          // Tables
-          for (const objData of tableObjects) {
-            let modelPromise;
-            if (objData.userData.isRoundTable) {
-              modelPromise = roundTable(scene);
-            } else if (objData.userData.maxCapacity === 2) {
-              modelPromise = create2SeaterTable(scene);
-            } else if (objData.userData.maxCapacity === 8) {
-              modelPromise = create8SeaterTable(scene);
-            } else {
-              modelPromise = table(scene);
-            }
-            // Ensure objectId is always set on userData
-            if (!objData.userData) objData.userData = {};
-            objData.userData.objectId = objData.objectId;
-            modelPromises.push({ type: 'table', promise: modelPromise, data: objData });
-          }
-
-          // Chairs
-          for (const objData of chairObjects) {
-            modelPromises.push({ 
-              type: 'chair', 
-              promise: chair(scene), 
-              data: objData 
-            });
-          }
-
-          // Plants
-          for (const objData of plantObjects) {
-            let modelPromise;
-            if (objData.userData.isPlant01) {
-              modelPromise = plant01(scene);
-            } else if (objData.userData.isPlant02) {
-              modelPromise = plant02(scene);
-            }
-            if (modelPromise) {
-              modelPromises.push({ 
-                type: 'plant', 
-                promise: modelPromise, 
-                data: objData 
-              });
-            }
-          }
-          
-          // Restaurant Equipment
-          for (const objData of fridgeObjects) {
-            objData.userData.objectId = objData.objectId;
-            modelPromises.push({ 
-              type: 'fridge', 
-              promise: largeFridge(scene), 
-              data: objData 
-            });
-          }
-          
-          for (const objData of foodStandObjects) {
-            objData.userData.objectId = objData.objectId;
-            modelPromises.push({ 
-              type: 'foodStand', 
-              promise: foodStand(scene), 
-              data: objData 
-            });
-          }
-          
-          for (const objData of drinkStandObjects) {
-            objData.userData.objectId = objData.objectId;
-            modelPromises.push({ 
-              type: 'drinkStand', 
-              promise: drinkStand(scene), 
-              data: objData 
-            });
-          }
-          
-          for (const objData of iceBoxObjects) {
-            objData.userData.objectId = objData.objectId;
-            modelPromises.push({ 
-              type: 'iceBox', 
-              promise: iceBox(scene), 
-              data: objData 
-            });
-          }
-          
-          for (const objData of iceCreamBoxObjects) {
-            objData.userData.objectId = objData.objectId;
-            modelPromises.push({ 
-              type: 'iceCreamBox', 
-              promise: iceCreamBox(scene), 
-              data: objData 
-            });
-          }
-
-          // Wait for all models to load
-          const modelResults = await Promise.allSettled(
-            modelPromises.map(mp => mp.promise)
-          );
-
-          // Position loaded models
-          updateLoadingProgress('Positioning objects...', 85);
-          let modelIndex = 0;
-          
-          for (const modelPromise of modelPromises) {
-            const result = modelResults[modelIndex];
-            if (result.status === 'fulfilled' && result.value) {
-              const model = result.value;
-              const objData = modelPromise.data;
-              
-              model.position.fromArray(objData.position);
-              model.rotation.set(
-                objData.rotation.x,
-                objData.rotation.y,
-                objData.rotation.z
-              );
-              model.scale.fromArray(objData.scale);
-              // Merge userData instead of overwriting
-              model.userData = {
-                ...model.userData,
-                ...objData.userData,
-                objectId: objData.objectId
-              };
-            }
-            modelIndex++;
-          }
-
-          // Create doors and windows
+          // Doors/windows render immediately (no OBJ loading)
           console.log("Loading doors and windows...");
-          updateLoadingProgress('Adding doors and windows...', 90);
-          const openingsObjects = floorplanData.objects.filter(obj => 
-            obj.type === 'door' || obj.type === 'window'
-          );
+          updateLoadingProgress('Adding doors and windows...', 70);
+          const openingsObjects = floorplanData.objects.filter(obj => obj.type === 'door' || obj.type === 'window');
 
           for (const objData of openingsObjects) {
             const parentWall = wallMap.get(objData.userData.parentWallId);
@@ -755,54 +600,151 @@ export default function PublicFloorPlan({ floorplanData, floorplanId, restaurant
               let opening;
               if (objData.type === 'door') {
                 opening = doorManagerRef.current.createDoor(
-                  parentWall, 
+                  parentWall,
                   new THREE.Vector3().fromArray(objData.position)
                 );
               } else {
                 opening = windowManagerRef.current.createWindow(
-                  parentWall, 
+                  parentWall,
                   new THREE.Vector3().fromArray(objData.position)
                 );
               }
 
               if (opening) {
-                opening.rotation.set(
-                  objData.rotation.x,
-                  objData.rotation.y,
-                  objData.rotation.z
-                );
+                opening.rotation.set(objData.rotation.x, objData.rotation.y, objData.rotation.z);
                 opening.scale.fromArray(objData.scale);
                 parentWall.userData.openings.push(opening);
               }
             }
           }
+
+          // Furniture: placeholders first, then real models in parallel
+          console.log("Creating furniture placeholders...");
+          updateLoadingProgress('Creating placeholders...', 75);
+
+          const getPlaceholderDims = (userData = {}) => {
+            if (userData.isChair) return [0.7, 1.0, 0.7];
+            if (userData.isSofa) return [1.6, 1.0, 0.8];
+            if (userData.isTable) {
+              if (userData.isRoundTable) return [1.1, 0.8, 1.1];
+              if (userData.maxCapacity === 2) return [0.9, 0.8, 0.9];
+              if (userData.maxCapacity === 8) return [1.6, 0.8, 1.6];
+              return [1.2, 0.8, 1.2];
+            }
+            if (userData.isPlant) return [0.6, 1.2, 0.6];
+            if (userData.isFridge) return [1.2, 2.0, 0.7];
+            if (userData.isFoodStand) return [1.2, 0.9, 0.7];
+            if (userData.isDrinkStand) return [0.9, 0.9, 0.6];
+            if (userData.isIceBox) return [1.0, 0.9, 0.7];
+            if (userData.isIceCreamBox) return [1.5, 1.1, 0.9];
+            return [1.0, 1.0, 1.0];
+          };
+
+          const placeholderByObjectId = new Map();
+          const furnitureObjects = floorplanData.objects.filter(obj => !['wall', 'door', 'window'].includes(obj.type));
+
+          for (const objData of furnitureObjects) {
+            if (!objData.userData) objData.userData = {};
+            objData.userData.objectId = objData.objectId;
+
+            const [w, h, d] = getPlaceholderDims(objData.userData);
+            const geom = new THREE.BoxGeometry(w, h, d);
+            geom.translate(0, h / 2, 0);
+            const mat = new THREE.MeshPhongMaterial({
+              color: 0x8a8a8a,
+              transparent: true,
+              opacity: 0.45
+            });
+            const mesh = new THREE.Mesh(geom, mat);
+            mesh.receiveShadow = true;
+
+            const placeholderGroup = new THREE.Group();
+            placeholderGroup.add(mesh);
+            placeholderGroup.position.fromArray(objData.position);
+            placeholderGroup.rotation.set(objData.rotation.x, objData.rotation.y, objData.rotation.z);
+            placeholderGroup.scale.fromArray(objData.scale);
+            placeholderGroup.userData = {
+              ...objData.userData,
+              objectId: objData.objectId
+            };
+
+            scene.add(placeholderGroup);
+            placeholderByObjectId.set(objData.objectId, placeholderGroup);
+          }
+
+          console.log("Loading real models in parallel...");
+          updateLoadingProgress('Loading detailed models...', 85);
+
+          const loadModelForObject = (objData) => {
+            if (objData.userData?.isChair) return chair(scene);
+            if (objData.userData?.isSofa) return sofa(scene);
+            if (objData.userData?.isPlant01) return plant01(scene);
+            if (objData.userData?.isPlant02) return plant02(scene);
+            if (objData.userData?.isTable) {
+              if (objData.userData.isRoundTable) return roundTable(scene);
+              if (objData.userData.maxCapacity === 2) return create2SeaterTable(scene);
+              if (objData.userData.maxCapacity === 8) return create8SeaterTable(scene);
+              return table(scene);
+            }
+            if (objData.userData?.isFridge) return Promise.resolve(largeFridge(scene));
+            if (objData.userData?.isFoodStand) return Promise.resolve(foodStand(scene));
+            if (objData.userData?.isDrinkStand) return Promise.resolve(drinkStand(scene));
+            if (objData.userData?.isIceBox) return Promise.resolve(iceBox(scene));
+            if (objData.userData?.isIceCreamBox) return Promise.resolve(iceCreamBox(scene));
+            return Promise.resolve(null);
+          };
+
+          const modelLoadTasks = furnitureObjects.map(async (objData) => {
+            try {
+              const model = await loadModelForObject(objData);
+              if (!model) return null;
+
+              model.position.fromArray(objData.position);
+              model.rotation.set(objData.rotation.x, objData.rotation.y, objData.rotation.z);
+              model.scale.fromArray(objData.scale);
+              model.userData = {
+                ...model.userData,
+                ...objData.userData,
+                objectId: objData.objectId
+              };
+
+              const placeholder = placeholderByObjectId.get(objData.objectId);
+              if (placeholder) {
+                scene.remove(placeholder);
+                placeholder.traverse((o) => {
+                  if (o.geometry) o.geometry.dispose();
+                  if (o.material) {
+                    if (Array.isArray(o.material)) o.material.forEach((m) => m.dispose());
+                    else o.material.dispose();
+                  }
+                });
+                placeholderByObjectId.delete(objData.objectId);
+              }
+
+              return model;
+            } catch (e) {
+              console.error('Failed to load model for object:', objData?.objectId, e);
+              return null;
+            }
+          });
+
+          // Keep loading in the background; placeholders render immediately
+          Promise.allSettled(modelLoadTasks).then(() => {
+            console.log('Detailed model loading finished');
+          });
         }
 
         console.log("Loading complete!");
         updateLoadingProgress('Experience ready!', 100);
-        
-        // Quick fade out
+
+        // Placeholders show immediately; don't block with a loading screen
+        setIsLoading(false);
+        setSceneLoaded(true);
+
+        setShowInstructions(true);
         setTimeout(() => {
-          if (loadingOverlay && loadingOverlay.parentNode) {
-            gsap.to(loadingOverlayRef.current, {
-              opacity: 0,
-              duration: 0.3,
-              onComplete: () => {
-                if (loadingOverlayRef.current?.parentNode) {
-                  loadingOverlayRef.current.parentNode.removeChild(loadingOverlayRef.current);
-                }
-                setIsLoading(false);
-                setSceneLoaded(true);
-                
-                
-                setShowInstructions(true);
-                setTimeout(() => {
-                  setShowInstructions(false);
-                }, 6000); // Reduced from 8 seconds
-              }
-            });
-          }
-        }, 500);
+          setShowInstructions(false);
+        }, 6000);
 
         // Animation loop
         console.log('Starting animation loop');
@@ -1022,6 +964,11 @@ export default function PublicFloorPlan({ floorplanData, floorplanId, restaurant
 
             // If table is booked, show the "Table Not Available" tooltip
             if (isBooked) {
+              const unavailableRanges = unavailableByTableRef.current[tableId] || [];
+              const bookedRangesText = unavailableRanges.length > 0
+                ? unavailableRanges.map(range => `${range.startTime} - ${range.endTime}`).join('<br/>')
+                : timeRef.current;
+
               // Create and show tooltip
               const tooltip = document.createElement('div');
               tooltip.className = 'booking-tooltip';
@@ -1034,7 +981,7 @@ export default function PublicFloorPlan({ floorplanData, floorplanId, restaurant
                   <div class="tooltip-body">
                     <p>This table is already booked for:</p>
                     <p class="font-semibold">${new Date(dateRef.current).toLocaleDateString()}</p>
-                    <p class="font-semibold">${timeRef.current}</p>
+                    <p class="font-semibold">${bookedRangesText}</p>
                   </div>
                 </div>
               `;
@@ -1554,6 +1501,14 @@ export default function PublicFloorPlan({ floorplanData, floorplanId, restaurant
 
     const result = await response.json();
 
+    // Booking status changed; invalidate cached floorplan JSON (non-sensitive)
+    try {
+      localStorage.removeItem(`floorplan_${floorplanId}`);
+      localStorage.removeItem(`floorplan_${floorplanId}_ts`);
+    } catch (e) {
+      console.warn('Failed to invalidate floorplan cache:', e);
+    }
+
     // Immediately update table color to red after successful booking
     if (table && table.children) {
         table.traverse((child) => {
@@ -1704,6 +1659,7 @@ export default function PublicFloorPlan({ floorplanData, floorplanId, restaurant
         if (!data.availableTables) {
             console.log('3. No availability data, assuming all tables available');
             setAvailableTables(new Set([]));
+            setUnavailableByTable({});
             return;
         }
 
@@ -1713,6 +1669,7 @@ export default function PublicFloorPlan({ floorplanData, floorplanId, restaurant
 
         // Set the available tables
         setAvailableTables(new Set(availableTableArray));
+        setUnavailableByTable(data.unavailableByTable || {});
         console.log('4. New available tables set:', new Set(availableTableArray));
 
         // Update table colors
@@ -1722,6 +1679,7 @@ export default function PublicFloorPlan({ floorplanData, floorplanId, restaurant
         console.error('Error checking availability:', error);
         // In case of error, assume all tables are available
         setAvailableTables(new Set([]));
+        setUnavailableByTable({});
         toast.error('Error checking table availability. Assuming all tables are available.');
     } finally {
         setIsAvailabilityLoading(false);

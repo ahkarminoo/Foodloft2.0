@@ -324,11 +324,7 @@ function FloorplanContent() {
           </div>
         </div>
  
-        <div className="loading-overlay" id="loading-overlay">
-          <div className="spinner">
-            <i className="bi bi-arrow-repeat"></i>
-          </div>
-        </div>
+        {/* Loading overlay removed */}
       </div>
     </>
   );

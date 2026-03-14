@@ -183,6 +183,14 @@ export class FileManager {
 
             // Capture and upload screenshot
             const floorplanId = existingFloorplanId || result.floorplan._id;
+
+            // Floorplan data changed; invalidate cached floorplan JSON (non-sensitive)
+            try {
+                localStorage.removeItem(`floorplan_${floorplanId}`);
+                localStorage.removeItem(`floorplan_${floorplanId}_ts`);
+            } catch (e) {
+                console.warn('Failed to invalidate floorplan cache:', e);
+            }
             await this.captureAndUploadScreenshot(floorplanId, token, existingFloorplanId ? true : false);
 
             // Only update restaurantData if we're creating a new floorplan
@@ -237,9 +245,13 @@ export class FileManager {
             // Position camera for better screenshot angle
             const originalCameraPosition = this.ui.camera.position.clone();
             const originalCameraRotation = this.ui.camera.rotation.clone();
+            const originalCameraUp = this.ui.camera.up.clone();
             
             // Set optimal camera position for top-down view
             this.ui.camera.position.set(0, 15, 0);
+            // Keep a stable top-down orientation.
+            // Using the default up vector (0, 1, 0) while looking straight down can cause camera roll.
+            this.ui.camera.up.set(0, 0, -1);
             this.ui.camera.lookAt(0, 0, 0);
             this.ui.camera.updateMatrixWorld();
             
@@ -399,6 +411,7 @@ export class FileManager {
             // Restore camera position
             this.ui.camera.position.copy(originalCameraPosition);
             this.ui.camera.rotation.copy(originalCameraRotation);
+            this.ui.camera.up.copy(originalCameraUp);
             this.ui.camera.updateMatrixWorld();
             
             // Restore UI elements
@@ -584,11 +597,86 @@ export class FileManager {
                 }
             }
 
-            // Second pass - create other objects
-            const nonWallData = sceneData.data.objects.filter(o => o.type !== 'wall');
-            for (const objectData of nonWallData) {
+            // Second pass - doors/windows render immediately (no OBJ loading)
+            const openingData = sceneData.data.objects.filter(o => o.type === 'door' || o.type === 'window');
+            for (const objectData of openingData) {
                 await this.recreateObject(objectData, isViewOnly, wallMap);
             }
+
+            // Third pass - progressive furniture loading
+            const furnitureData = sceneData.data.objects.filter(o => !['wall', 'door', 'window'].includes(o.type));
+
+            const placeholderMaterialTemplate = new THREE.MeshPhongMaterial({
+                color: 0x8a8a8a,
+                transparent: true,
+                opacity: 0.45
+            });
+
+            const getPlaceholderDims = (userData = {}) => {
+                if (userData.isChair) return [0.7, 1.0, 0.7];
+                if (userData.isSofa) return [1.6, 1.0, 0.8];
+                if (userData.isTable) {
+                    if (userData.isRoundTable) return [1.1, 0.8, 1.1];
+                    if (userData.maxCapacity === 2) return [0.9, 0.8, 0.9];
+                    if (userData.maxCapacity === 8) return [1.6, 0.8, 1.6];
+                    return [1.2, 0.8, 1.2];
+                }
+                if (userData.isPlant) return [0.6, 1.2, 0.6];
+                if (userData.isFridge) return [1.2, 2.0, 0.7];
+                if (userData.isFoodStand) return [1.2, 0.9, 0.7];
+                if (userData.isDrinkStand) return [0.9, 0.9, 0.6];
+                if (userData.isIceBox) return [1.0, 0.9, 0.7];
+                if (userData.isIceCreamBox) return [1.5, 1.1, 0.9];
+                return [1.0, 1.0, 1.0];
+            };
+
+            const placeholderMap = new Map();
+            for (const objectData of furnitureData) {
+                const [w, h, d] = getPlaceholderDims(objectData.userData);
+                const geom = new THREE.BoxGeometry(w, h, d);
+                geom.translate(0, h / 2, 0);
+                // Clone material per placeholder so disposing doesn't affect others
+                const mesh = new THREE.Mesh(geom, placeholderMaterialTemplate.clone());
+                mesh.castShadow = false;
+                mesh.receiveShadow = true;
+
+                const group = new THREE.Group();
+                group.add(mesh);
+                group.position.fromArray(objectData.position);
+                group.rotation.set(objectData.rotation.x, objectData.rotation.y, objectData.rotation.z);
+                group.scale.fromArray(objectData.scale);
+                group.userData = {
+                    ...objectData.userData,
+                    _id: objectData._id,
+                    isInteractable: !isViewOnly,
+                    maxCapacity: objectData.userData?.maxCapacity || 4
+                };
+
+                this.ui.scene.add(group);
+                placeholderMap.set(objectData, group);
+            }
+
+            // Load real furniture in parallel and swap placeholders as they finish
+            const loadPromises = furnitureData.map(async (objectData) => {
+                const model = await this.recreateObject(objectData, isViewOnly, wallMap);
+                if (model) {
+                    const placeholder = placeholderMap.get(objectData);
+                    if (placeholder) {
+                        this.ui.scene.remove(placeholder);
+                        placeholder.traverse((o) => {
+                            if (o.geometry) o.geometry.dispose();
+                            if (o.material) {
+                                if (Array.isArray(o.material)) o.material.forEach((m) => m.dispose());
+                                else o.material.dispose();
+                            }
+                        });
+                        placeholderMap.delete(objectData);
+                    }
+                }
+                return model;
+            });
+
+            await Promise.allSettled(loadPromises);
 
             // Reset wall manager state if not in view-only mode
             if (!isViewOnly) {

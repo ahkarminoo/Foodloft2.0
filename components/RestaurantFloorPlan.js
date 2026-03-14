@@ -293,25 +293,76 @@ export default function RestaurantFloorPlan({ token, restaurantId, isCustomerVie
         const loadFloorplanData = async () => {
           try {
             console.log('Starting to load floorplan with ID:', floorplanId);
-            let response;
-            if (isCustomerView) {
-              response = await fetch(`/api/scenes/${floorplanId}/public`);
-            } else {
-              const token = localStorage.getItem("restaurantOwnerToken");
-              response = await fetch(`/api/scenes/${floorplanId}`, {
-                headers: {
-                  'Content-Type': 'application/json',
-                  'Authorization': `Bearer ${token}`
-                }
-              });
+            const cacheKey = `floorplan_${floorplanId}`;
+            const tsKey = `floorplan_${floorplanId}_ts`;
+            const staleMs = 3 * 60 * 1000;
+
+            let floorplanData;
+            try {
+              const cached = localStorage.getItem(cacheKey);
+              const tsRaw = localStorage.getItem(tsKey);
+              const ts = tsRaw ? Number(tsRaw) : 0;
+              const fresh = cached && ts && (Date.now() - ts) < staleMs;
+
+              if (fresh) {
+                floorplanData = JSON.parse(cached);
+              }
+            } catch (e) {
+              console.warn('Failed to read floorplan cache:', e);
             }
-            
-            if (!response.ok) throw new Error('Failed to load floorplan');
-            
-            const floorplanData = await response.json();
+
+            if (!floorplanData) {
+              let response;
+              if (isCustomerView) {
+                response = await fetch(`/api/scenes/${floorplanId}/public`);
+              } else {
+                const token = localStorage.getItem("restaurantOwnerToken");
+                response = await fetch(`/api/scenes/${floorplanId}`, {
+                  headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`
+                  }
+                });
+              }
+
+              if (!response.ok) throw new Error('Failed to load floorplan');
+
+              floorplanData = await response.json();
+
+              try {
+                localStorage.setItem(cacheKey, JSON.stringify(floorplanData));
+                localStorage.setItem(tsKey, String(Date.now()));
+              } catch (e) {
+                console.warn('Failed to write floorplan cache:', e);
+              }
+            }
             
             if (floorplanData.data && floorplanData.data.objects) {
               const wallMap = new Map();
+
+              const placeholderMaterialTemplate = new THREE.MeshPhongMaterial({
+                color: 0x8a8a8a,
+                transparent: true,
+                opacity: 0.45
+              });
+
+              const getPlaceholderDims = (userData = {}) => {
+                if (userData.isChair) return [0.7, 1.0, 0.7];
+                if (userData.isSofa) return [1.6, 1.0, 0.8];
+                if (userData.isTable) {
+                  if (userData.isRoundTable) return [1.1, 0.8, 1.1];
+                  if (userData.maxCapacity === 2) return [0.9, 0.8, 0.9];
+                  if (userData.maxCapacity === 8) return [1.6, 0.8, 1.6];
+                  return [1.2, 0.8, 1.2];
+                }
+                if (userData.isPlant) return [0.6, 1.2, 0.6];
+                if (userData.isFridge) return [1.2, 2.0, 0.7];
+                if (userData.isFoodStand) return [1.2, 0.9, 0.7];
+                if (userData.isDrinkStand) return [0.9, 0.9, 0.6];
+                if (userData.isIceBox) return [1.0, 0.9, 0.7];
+                if (userData.isIceCreamBox) return [1.5, 1.1, 0.9];
+                return [1.0, 1.0, 1.0];
+              };
 
               // First pass: Create walls
               const wallObjects = floorplanData.data.objects.filter(obj => obj.type === 'wall');
@@ -372,14 +423,46 @@ export default function RestaurantFloorPlan({ token, restaurantId, isCustomerVie
                 }
               }
 
-              // Third pass: Create furniture
-              const furnitureObjects = floorplanData.data.objects.filter(obj => 
-                !['wall', 'door', 'window'].includes(obj.type)
-              );
+              // Third pass: progressive furniture loading
+              const furnitureObjects = floorplanData.data.objects.filter(obj => !['wall', 'door', 'window'].includes(obj.type));
 
+              // First pass: placeholders
+              const placeholders = new Map();
               for (const objData of furnitureObjects) {
+                const [w, h, d] = getPlaceholderDims(objData.userData);
+                const geom = new THREE.BoxGeometry(w, h, d);
+                geom.translate(0, h / 2, 0);
+                // Clone material per placeholder so disposing doesn't affect others
+                const mesh = new THREE.Mesh(geom, placeholderMaterialTemplate.clone());
+                mesh.receiveShadow = true;
+
+                // Booking color logic (red = booked)
+                if (objData.userData?.isBooked) {
+                  if (Array.isArray(mesh.material)) {
+                    mesh.material.forEach(mat => mat.color.setHex(0xff0000));
+                  } else if (mesh.material) {
+                    mesh.material.color.setHex(0xff0000);
+                  }
+                }
+
+                const placeholderGroup = new THREE.Group();
+                placeholderGroup.add(mesh);
+                placeholderGroup.position.fromArray(objData.position);
+                placeholderGroup.rotation.set(objData.rotation.x, objData.rotation.y, objData.rotation.z);
+                placeholderGroup.scale.fromArray(objData.scale);
+                placeholderGroup.userData = { ...objData.userData };
+
+                scene.add(placeholderGroup);
+                placeholders.set(objData, placeholderGroup);
+              }
+
+              // Let the scene show immediately
+              setIsLoading(false);
+
+              // Second pass: load real models in parallel
+              const loadPromises = furnitureObjects.map(async (objData) => {
                 let model;
-                
+
                 if (objData.userData.isChair) {
                   model = await chair(scene);
                 } else if (objData.userData.isTable) {
@@ -414,28 +497,37 @@ export default function RestaurantFloorPlan({ token, restaurantId, isCustomerVie
 
                 if (model) {
                   model.position.fromArray(objData.position);
-                  model.rotation.set(
-                    objData.rotation.x,
-                    objData.rotation.y,
-                    objData.rotation.z
-                  );
+                  model.rotation.set(objData.rotation.x, objData.rotation.y, objData.rotation.z);
                   model.scale.fromArray(objData.scale);
-                  model.userData = { ...objData.userData };
-                  
-                  // Set color based on booking status
-                  if (model.material) {
-                    if (objData.userData.isBooked) {
-                      if (Array.isArray(model.material)) {
-                        model.material.forEach(mat => mat.color.setHex(0xff0000));
-                      } else {
-                        model.material.color.setHex(0xff0000);
+                  model.userData = { ...model.userData, ...objData.userData };
+
+                  // Booking color logic (red = booked)
+                  if (objData.userData?.isBooked) {
+                    model.traverse((child) => {
+                      if (child.isMesh && child.material) {
+                        if (Array.isArray(child.material)) child.material.forEach((m) => m.color.setHex(0xff0000));
+                        else child.material.color.setHex(0xff0000);
                       }
-                    }
+                    });
                   }
-                  
-                  scene.add(model);
+
+                  const placeholder = placeholders.get(objData);
+                  if (placeholder) {
+                    scene.remove(placeholder);
+                    placeholder.traverse((o) => {
+                      if (o.geometry) o.geometry.dispose();
+                      if (o.material) {
+                        if (Array.isArray(o.material)) o.material.forEach((m) => m.dispose());
+                        else o.material.dispose();
+                      }
+                    });
+                    placeholders.delete(objData);
+                  }
                 }
-              }
+                return model;
+              });
+
+              await Promise.allSettled(loadPromises);
             }
           } catch (error) {
             console.error('Error loading floorplan:', error);
@@ -445,7 +537,18 @@ export default function RestaurantFloorPlan({ token, restaurantId, isCustomerVie
         };
 
         if (floorplanId) {
-          await loadFloorplanData();
+          // Load asynchronously so the scene can render placeholders immediately
+          const loadPromise = loadFloorplanData();
+          loadPromise.then(() => {
+            // Create table labels after real models are loaded
+            setTimeout(() => {
+              try {
+                createRestaurantTableLabels();
+              } catch (e) {
+                console.warn('Failed to create table labels after load:', e);
+              }
+            }, 100);
+          });
         }
 
         // Table label functionality for restaurant staff
@@ -557,10 +660,7 @@ export default function RestaurantFloorPlan({ token, restaurantId, isCustomerVie
         };
         animate();
 
-        // Create table labels after scene is loaded
-        setTimeout(() => {
-          createRestaurantTableLabels();
-        }, 500);
+        // Table labels are created after loadFloorplanData finishes (see above)
 
         // Handle window resize
         const handleResize = () => {
@@ -629,14 +729,9 @@ export default function RestaurantFloorPlan({ token, restaurantId, isCustomerVie
         </div>
         
         <div className="relative w-full h-[80vh] rounded-lg bg-gradient-to-b from-gray-50 to-gray-100 shadow-lg">
-          {isLoading && (
-            <div className="loading-overlay">
-              <img src="/loading/loading.gif" alt="Loading..." className="w-16 h-16" />
-            </div>
-          )}
           <div ref={containerRef} className="absolute inset-0 rounded-lg" />
         </div>
       </div>
     </div>
   );
-} 
+}

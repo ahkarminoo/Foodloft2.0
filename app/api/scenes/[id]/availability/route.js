@@ -112,6 +112,7 @@ export async function POST(request, { params }) {
         console.log('4. No bookings found, all tables available');
         return NextResponse.json({ 
           availableTables: [],
+          unavailableByTable: {},
           debug: {
             totalTables: tableIds.length,
             bookingsFound: 0,
@@ -121,7 +122,8 @@ export async function POST(request, { params }) {
         });
       }
 
-      // Check for time overlap
+      // Check for time overlap and collect overlapping booking windows per table
+      const unavailableByTable = {};
       const bookedTableIds = bookings.filter(booking => {
         // Convert booking times to comparable format (minutes since midnight)
         const bookingStart = timeToMinutes(booking.startTime);
@@ -140,6 +142,17 @@ export async function POST(request, { params }) {
           '| Overlap:', hasOverlap
         );
 
+        if (hasOverlap) {
+          if (!unavailableByTable[booking.tableId]) {
+            unavailableByTable[booking.tableId] = [];
+          }
+          unavailableByTable[booking.tableId].push({
+            startTime: booking.startTime,
+            endTime: booking.endTime,
+            status: booking.status
+          });
+        }
+
         return hasOverlap;
       }).map(booking => booking.tableId);
 
@@ -149,6 +162,7 @@ export async function POST(request, { params }) {
       if (bookedTableIds.length === 0) {
         return NextResponse.json({ 
           availableTables: [],
+          unavailableByTable: {},
           debug: {
             totalTables: tableIds.length,
             bookingsFound: bookings.length,
@@ -164,6 +178,7 @@ export async function POST(request, { params }) {
 
       return NextResponse.json({ 
         availableTables,
+        unavailableByTable,
         debug: {
           totalTables: tableIds.length,
           bookingsFound: bookings.length,
@@ -177,6 +192,7 @@ export async function POST(request, { params }) {
       console.error('Error checking bookings:', bookingError);
       return NextResponse.json({ 
         availableTables: [],
+        unavailableByTable: {},
         debug: {
           totalTables: tableIds.length,
           bookingsFound: 0,
@@ -191,6 +207,7 @@ export async function POST(request, { params }) {
     console.error('Error in availability check:', error);
     return NextResponse.json({ 
       availableTables: [],
+      unavailableByTable: {},
       debug: {
         totalTables: 0,
         bookingsFound: 0,

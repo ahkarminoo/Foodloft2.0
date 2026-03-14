@@ -145,6 +145,27 @@ export default function RestaurantFloorplanPage() {
     // Restaurant and floorplan fetching logic
     const fetchRestaurantAndFloorplan = async () => {
       try {
+        // Fast path: 3-minute local cache for public restaurant + floorplans
+        const restaurantCacheKey = `restaurant_public_${restaurantId}`;
+        const restaurantCacheTsKey = `restaurant_public_${restaurantId}_ts`;
+        const staleMs = 3 * 60 * 1000;
+
+        try {
+          const cached = localStorage.getItem(restaurantCacheKey);
+          const tsRaw = localStorage.getItem(restaurantCacheTsKey);
+          const ts = tsRaw ? Number(tsRaw) : 0;
+          const fresh = cached && ts && (Date.now() - ts) < staleMs;
+
+          if (fresh) {
+            const cachedRestaurant = JSON.parse(cached);
+            setRestaurant(cachedRestaurant);
+            setLoading(false);
+            return;
+          }
+        } catch (e) {
+          console.warn('Failed to read restaurant cache:', e);
+        }
+
         const response = await fetch(`/api/restaurants/${restaurantId}/public-floorplan`);
         if (!response.ok) {
           throw new Error('Failed to fetch restaurant');
@@ -152,6 +173,23 @@ export default function RestaurantFloorplanPage() {
         
         const data = await response.json();
         setRestaurant(data);
+
+        // Cache response and also cache each floorplan JSON by id
+        try {
+          localStorage.setItem(restaurantCacheKey, JSON.stringify(data));
+          localStorage.setItem(restaurantCacheTsKey, String(Date.now()));
+
+          if (Array.isArray(data?.allFloorplans)) {
+            const now = Date.now();
+            data.allFloorplans.forEach((fp) => {
+              if (!fp?._id || !fp?.data) return;
+              localStorage.setItem(`floorplan_${fp._id}`, JSON.stringify({ data: fp.data }));
+              localStorage.setItem(`floorplan_${fp._id}_ts`, String(now));
+            });
+          }
+        } catch (e) {
+          console.warn('Failed to write caches:', e);
+        }
       } catch (error) {
         console.error('Error fetching restaurant data:', error);
       } finally {
