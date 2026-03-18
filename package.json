@@ -43,7 +43,7 @@
     "jsonwebtoken": "^9.0.2",
     "lucide-react": "^0.474.0",
     "mongoose": "^8.8.1",
-    "next": "15.1.7",
+    "next": "15.1.11",
     "next-auth": "^4.24.10",
     "nodemailer": "^6.10.1",
     "qrcode": "^1.5.4",
